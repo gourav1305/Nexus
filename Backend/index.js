@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
@@ -435,6 +436,9 @@ const { synthesizeSpeech } = require('./ttsEngine');
 const { detectInfoQuery, handleInfoQuery, getInfoApiStatus } = require('./services/infoServices');
 const { createRecipeEngine } = require('./recipeEngine');
 const { router: authRouter, authMiddleware } = require('./auth');
+const { WebSocketServer } = require('ws');
+const { createTtsStreamHandler } = require('./services/ttsStream');
+const { detectEmotion, buildSystemPrompt } = require('./services/emotionDetector');
 
 app.get('/api/voices', (req, res) => {
     res.json({
@@ -849,11 +853,19 @@ app.post('/api/chat', async (req, res) => {
 
         apiUsage.groqCalls++;
         logEvent('llm', 'Groq LLM call', message);
+
+        const emotion = detectEmotion(message.trim());
+        const systemContent = buildSystemPrompt(
+          'You are NEXUS, a concise voice assistant. Reply naturally in the same language or Hinglish style as the user. Keep responses voice-friendly and avoid markdown unless absolutely needed.',
+          emotion,
+        );
+        if (emotion) logEvent('emotion', `Detected: ${emotion.emotion} (score: ${emotion.score})`);
+
         const chatCompletion = await groq.chat.completions.create({
             messages: [
                 {
                     role: 'system',
-                    content: 'You are NEXUS, a concise voice assistant. Reply naturally in the same language or Hinglish style as the user. Keep responses voice-friendly and avoid markdown unless absolutely needed.',
+                    content: systemContent,
                 },
                 { role: 'user', content: message.trim() },
             ],
@@ -874,6 +886,7 @@ app.post('/api/chat', async (req, res) => {
             text: textResponse,
             ...speech,
             model: GROQ_MODEL,
+            emotion: emotion ? emotion.emotion : null,
         });
 
     } catch (err) {
@@ -894,8 +907,41 @@ if (require('fs').existsSync(frontendDist)) {
   });
 }
 
+// ── Voice Transcription Endpoint ──
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+app.post('/api/voice/transcribe', upload.single('audio'), async (req, res) => {
+  let tmpPath = null;
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'No audio file' });
+    tmpPath = path.join(os.tmpdir(), `nexus-voice-${Date.now()}.webm`);
+    fs.writeFileSync(tmpPath, req.file.buffer);
+
+    const transcription = await groq.audio.transcriptions.create({
+      file: fs.createReadStream(tmpPath),
+      model: 'whisper-large-v3-turbo',
+      language: 'en',
+      response_format: 'text',
+    });
+
+    res.json({ ok: true, text: transcription || '' });
+  } catch (err) {
+    logEvent('error', 'Transcription failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    if (tmpPath) try { fs.unlinkSync(tmpPath); } catch {}
+  }
+});
+
+// ── WebSocket Server for Streaming TTS ──
+const server = require('http').createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws/tts' });
+createTtsStreamHandler(wss, logEvent);
+console.log('[TTS Stream] WebSocket server ready on /ws/tts');
+
 const PORT = process.env.PORT || 5060;
-const server = app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`JARVIS backend running on http://localhost:${PORT}`);
     console.log(`Groq model: ${GROQ_MODEL}`);
     console.log(`TTS voice: ${TTS_VOICE}`);

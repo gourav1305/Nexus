@@ -303,18 +303,18 @@ const Navbar = ({
             onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('dashboard'); }}
             onMouseEnter={handleNavHover}
           >
-            <LayoutDashboard size={18} className="nav-icon" />
-            Dashboard
+            <LayoutDashboard size={16} className="nav-icon" />
+            <span className="nav-text">Dashboard</span>
           </a>
         </li>
         <li>
           <a href="#"
-            className={`nav-item ${currentView === 'systems' ? 'active' : ''}`}
+            className={`nav-item ${currentView === 'nexus' ? 'active' : ''}`}
             onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('nexus'); }}
             onMouseEnter={handleNavHover}
           >
-            <Cpu size={18} className="nav-icon" />
-            Nexus Core
+            <Cpu size={16} className="nav-icon" />
+            <span className="nav-text">Nexus Core</span>
           </a>
         </li>
         <li>
@@ -323,8 +323,8 @@ const Navbar = ({
             onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('datacore'); }}
             onMouseEnter={handleNavHover}
           >
-            <Database size={18} className="nav-icon" />
-            Data Core
+            <Database size={16} className="nav-icon" />
+            <span className="nav-text">Data Core</span>
           </a>
         </li>
         <li>
@@ -333,14 +333,14 @@ const Navbar = ({
             onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('recipes'); }}
             onMouseEnter={handleNavHover}
           >
-            <Activity size={18} className="nav-icon" />
-            Recipes
+            <Activity size={16} className="nav-icon" />
+            <span className="nav-text">Recipes</span>
           </a>
         </li>
         <li style={{ position: 'relative' }}>
-          <a href="#" className="nav-item" onClick={handleSettingsClick} onMouseEnter={handleNavHover}>
-            <Settings size={18} className="nav-icon" />
-            Settings
+          <a href="#" className={`nav-item ${showSettings ? 'active' : ''}`} onClick={handleSettingsClick} onMouseEnter={handleNavHover}>
+            <Settings size={16} className="nav-icon" />
+            <span className="nav-text">Settings</span>
           </a>
           {showSettings && (
             <div className="settings-dropdown">
@@ -382,10 +382,10 @@ const Navbar = ({
 
       <div className="action-section">
         <button className="icon-btn" aria-label="Search" onMouseEnter={handleNavHover}>
-          <Search size={22} strokeWidth={1.5} />
+          <Search size={18} strokeWidth={1.5} />
         </button>
         <button className="icon-btn" aria-label="Notifications" onMouseEnter={handleNavHover}>
-          <Bell size={22} strokeWidth={1.5} />
+          <Bell size={18} strokeWidth={1.5} />
         </button>
         {user && (
           <div className="user-profile-nav" onMouseEnter={handleNavHover}>

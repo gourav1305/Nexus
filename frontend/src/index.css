@@ -762,6 +762,58 @@ code {
   filter: hue-rotate(0deg);
 }
 
+.command-input-container.vad-active {
+  border-color: rgba(57, 209, 255, 0.5);
+  box-shadow: 0 0 30px rgba(57, 209, 255, 0.15), 0 0 60px rgba(57, 209, 255, 0.05);
+}
+.command-input-container.vad-active::before {
+  opacity: 1;
+  animation: border-rotate 2s linear infinite;
+}
+.command-input-container.voice-processing {
+  border-color: rgba(57, 209, 255, 0.7);
+  box-shadow: 0 0 40px rgba(57, 209, 255, 0.25), 0 0 80px rgba(57, 209, 255, 0.08);
+}
+
+.mic-btn.vad-listening {
+  background: rgba(57, 209, 255, 0.15) !important;
+  color: #7dfbff !important;
+  animation: vad-pulse 1.5s ease-in-out infinite !important;
+}
+.mic-btn.vad-processing {
+  background: rgba(57, 209, 255, 0.2) !important;
+  color: #7dfbff !important;
+  animation: vad-processing 0.8s ease-in-out infinite !important;
+}
+@keyframes vad-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(57, 209, 255, 0.3); }
+  50% { box-shadow: 0 0 0 14px rgba(57, 209, 255, 0.05); }
+}
+@keyframes vad-processing {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 8px rgba(57, 209, 255, 0.2); }
+  50% { transform: scale(1.08); box-shadow: 0 0 20px rgba(57, 209, 255, 0.4); }
+}
+
+.voice-spinner {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #7dfbff;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: translateY(-50%) rotate(360deg); } }
+
+.mic-pulse {
+  animation: mic-icon-pulse 1s ease-in-out infinite;
+}
+@keyframes mic-icon-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.spin { animation: spin 0.8s linear infinite; }
+
 .image-preview-wrap {
   position: relative;
   flex-shrink: 0;

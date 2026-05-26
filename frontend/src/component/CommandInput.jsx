@@ -1,6 +1,9 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Mic, MicOff, ImagePlus, X } from 'lucide-react';
+import { Send, Mic, MicOff, ImagePlus, X, Loader } from 'lucide-react';
 import { playClickBlip, playHoverBlip, playActivationChime, playDeactivationChime } from '../utils/audioFeedback';
+import { VoiceActivityDetector } from '../utils/vad';
+import { WakeWordDetector } from '../utils/wakeWord';
+import { StreamingAudioPlayer } from '../utils/audioPlayer';
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 const MAX_IMAGE_SIZE = 4 * 1024 * 1024;
@@ -22,14 +25,18 @@ const CommandInput = ({ onSend, onVisionSend, assistantEnabled, setAssistantEnab
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [fileError, setFileError] = useState('');
+  const [vadActive, setVadActive] = useState(false);
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
   const fileInputRef = useRef(null);
+  const vadRef = useRef(null);
+  const wakeWordRef = useRef(null);
+  const audioPlayerRef = useRef(null);
 
   const clearImage = () => {
     setSelectedImage(null);
     setImagePreview(null);
   };
-
-  const [fileError, setFileError] = useState('');
 
   const processFile = useCallback(async (file) => {
     setFileError('');
@@ -52,6 +59,89 @@ const CommandInput = ({ onSend, onVisionSend, assistantEnabled, setAssistantEnab
       if (imagePreview) URL.revokeObjectURL(imagePreview);
     };
   }, [imagePreview]);
+
+  const handleVoiceInput = useCallback((transcript) => {
+    setVoiceProcessing(false);
+    setVadActive(false);
+    if (transcript && transcript.trim()) {
+      onSend(transcript);
+    }
+  }, [onSend]);
+
+  useEffect(() => {
+    if (!assistantEnabled) {
+      if (vadRef.current) { vadRef.current.stop(); vadRef.current = null; }
+      if (wakeWordRef.current) { wakeWordRef.current.stop(); wakeWordRef.current = null; }
+      if (audioPlayerRef.current) { audioPlayerRef.current.disconnect(); audioPlayerRef.current = null; }
+      setVadActive(false);
+      setVoiceProcessing(false);
+      return;
+    }
+
+    if (!audioPlayerRef.current) {
+      const ap = new StreamingAudioPlayer({
+        onStart: () => {},
+        onDone: () => {},
+        onError: (err) => console.warn('[StreamingAudioPlayer]', err.message),
+      });
+      ap.connect();
+      audioPlayerRef.current = ap;
+    }
+
+    if (!wakeWordRef.current) {
+      const ww = new WakeWordDetector({
+        onWakeWord: (keyword) => {
+          if (audioFeedbackEnabled) playActivationChime();
+          setVadActive(true);
+        },
+        onError: (err) => console.warn('[WakeWord]', err),
+      });
+      ww.start();
+      wakeWordRef.current = ww;
+    }
+
+    if (!vadRef.current) {
+      const vad = new VoiceActivityDetector({
+        speechThreshold: 0.018,
+        silenceThreshold: 0.01,
+        speechFrames: 8,
+        silenceFrames: 25,
+        onSpeechStart: () => {
+          setVoiceProcessing(true);
+        },
+        onSpeechEnd: () => {},
+        onAudioData: async (blob) => {
+          setVoiceProcessing(true);
+          try {
+            const formData = new FormData();
+            formData.append('audio', blob, 'speech.webm');
+            const res = await fetch('/api/voice/transcribe', {
+              method: 'POST',
+              body: formData,
+            });
+            const data = await res.json();
+            if (data.ok && data.text) {
+              handleVoiceInput(data.text);
+            } else {
+              setVoiceProcessing(false);
+              setVadActive(false);
+            }
+          } catch {
+            setVoiceProcessing(false);
+            setVadActive(false);
+          }
+        },
+      });
+      vad.start();
+      vadRef.current = vad;
+    }
+
+    return () => {
+      if (vadRef.current) { vadRef.current.stop(); vadRef.current = null; }
+      if (wakeWordRef.current) { wakeWordRef.current.stop(); wakeWordRef.current = null; }
+      if (audioPlayerRef.current) { audioPlayerRef.current.disconnect(); audioPlayerRef.current = null; }
+    };
+  }, [assistantEnabled, audioFeedbackEnabled, handleVoiceInput]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -128,7 +218,7 @@ const CommandInput = ({ onSend, onVisionSend, assistantEnabled, setAssistantEnab
 
   return (
     <div
-      className={`command-input-container ${isDragOver ? 'drag-over' : ''} ${selectedImage ? 'has-image' : ''}`}
+      className={`command-input-container ${isDragOver ? 'drag-over' : ''} ${selectedImage ? 'has-image' : ''} ${vadActive ? 'vad-active' : ''} ${voiceProcessing ? 'voice-processing' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -150,16 +240,23 @@ const CommandInput = ({ onSend, onVisionSend, assistantEnabled, setAssistantEnab
             placeholder={
               isThinking
                 ? "Analyzing neural pathways..."
-                : selectedImage
-                  ? "Ask about this image..."
-                  : "Ask NEXUS... (paste/drop images)"
+                : voiceProcessing
+                  ? "Listening..."
+                  : vadActive
+                    ? "Say something..."
+                    : assistantEnabled
+                      ? 'Say "Hey Nexus" or type...'
+                      : selectedImage
+                        ? "Ask about this image..."
+                        : "Ask NEXUS... (paste/drop images)"
             }
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onPaste={handlePaste}
-            disabled={isThinking}
+            disabled={isThinking || voiceProcessing}
           />
           <div className="input-glow" />
+          {voiceProcessing && <Loader size={18} className="voice-spinner" />}
         </div>
 
         <div className="input-actions">
@@ -192,12 +289,12 @@ const CommandInput = ({ onSend, onVisionSend, assistantEnabled, setAssistantEnab
 
           <button
             type="button"
-            className={`action-btn mic-btn ${assistantEnabled ? 'active' : ''}`}
+            className={`action-btn mic-btn ${assistantEnabled ? 'active' : ''} ${vadActive ? 'vad-listening' : ''} ${voiceProcessing ? 'vad-processing' : ''}`}
             onClick={handleMicToggle}
             title={assistantEnabled ? "Disable Voice Assistant" : "Enable Voice Assistant"}
             onMouseEnter={() => { if (audioFeedbackEnabled) playHoverBlip(); }}
           >
-            {assistantEnabled ? <Mic size={20} /> : <MicOff size={20} opacity={0.6} />}
+            {voiceProcessing ? <Loader size={20} className="spin" /> : vadActive ? <Mic size={20} className="mic-pulse" /> : assistantEnabled ? <Mic size={20} /> : <MicOff size={20} opacity={0.6} />}
           </button>
         </div>
       </form>
