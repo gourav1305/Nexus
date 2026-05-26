@@ -1,0 +1,25 @@
+.view-container {
+  flex: 1;
+  position: relative;
+  overflow-y: auto;
+  scrollbar-width: none;
+  box-sizing: border-box;
+  min-height: 0;
+}
+.view-container::-webkit-scrollbar {
+  display: none;
+}
+.view-container.view-dashboard {
+  padding-top: var(--layout-header-clearance);
+  padding-bottom: var(--footer-clearance);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.nav-item.active {
+  color: #7dfbff;
+  text-shadow: 0 0 10px rgba(126, 236, 255, 0.8);
+}
+.nav-icon {
+  margin-right: 8px;
+}
