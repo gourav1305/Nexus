@@ -26,6 +26,19 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// ── Optional Auth Middleware (does not reject) ──
+function optionalAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (header && header.startsWith('Bearer ')) {
+    try {
+      const decoded = jwt.verify(header.split(' ')[1], JWT_SECRET);
+      req.userId = decoded.id;
+      req.username = decoded.username;
+    } catch {}
+  }
+  next();
+}
+
 // ── Register ──
 router.post('/register', async (req, res) => {
   try {
@@ -210,4 +223,4 @@ router.post('/recipes/:id/toggle', authMiddleware, (req, res) => {
   res.json({ ok: true, recipe });
 });
 
-module.exports = { router, authMiddleware };
+module.exports = { router, authMiddleware, optionalAuth };

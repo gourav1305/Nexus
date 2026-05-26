@@ -41,6 +41,37 @@ let serverVoiceSettings = resolveVoicePrefs({
     voice: TTS_VOICE,
 });
 
+// ── Helpers for RAG detection ──
+const MEMORY_TRIGGERS = /\b(yaad\s*dilao|yaad\s*karo|kal\s*kya\s*baat|pehle\s*kya\s*hua|pehle\s*ki\s*baat|jo\s*humne\s*baat|pichhli\s*baat|purani\s*baat|remember|recall|what did we|jo.*pehle|uske\s*baare\s*me.*batao)\b/i;
+const SEARCH_TRIGGERS = /\b(search|find|look up|google|khoj|dhoondh|dhundo|pata karo|info about|information about|what is|who is|tell me about|latest.*news|recent.*update)\b/i;
+const BOTH_TRIGGERS = /\b(new|update|current|recent|aaj\s*ka|today)\b/i;
+
+const detectMemoryQuery = (text) => MEMORY_TRIGGERS.test(text);
+const detectSearchQuery = (text) => SEARCH_TRIGGERS.test(text) || BOTH_TRIGGERS.test(text);
+
+// ── Web Search Endpoint ──
+const searchCache = {};
+
+app.get('/api/web/search', async (req, res) => {
+  try {
+    const { q, limit } = req.query;
+    if (!q || !q.trim()) return res.status(400).json({ ok: false, error: 'Query param "q" required' });
+    const num = Math.min(parseInt(limit) || 5, 10);
+    const cacheKey = `${q}:${num}`;
+
+    if (searchCache[cacheKey] && Date.now() - searchCache[cacheKey].ts < 120000) {
+      return res.json({ ok: true, ...searchCache[cacheKey].data, cached: true });
+    }
+
+    const results = await searchWeb(q, num);
+    searchCache[cacheKey] = { data: results, ts: Date.now() };
+    res.json({ ok: true, ...results });
+  } catch (err) {
+    logEvent('error', 'Web search failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ── Monitoring & Usage Tracking ──
 let pendingSystemAction = null;
 const COMMAND_TIMEOUT = 30000;
@@ -435,10 +466,12 @@ const detectSystemCommand = (message) => {
 const { synthesizeSpeech } = require('./ttsEngine');
 const { detectInfoQuery, handleInfoQuery, getInfoApiStatus } = require('./services/infoServices');
 const { createRecipeEngine } = require('./recipeEngine');
-const { router: authRouter, authMiddleware } = require('./auth');
+const { router: authRouter, authMiddleware, optionalAuth } = require('./auth');
 const { WebSocketServer } = require('ws');
 const { createTtsStreamHandler } = require('./services/ttsStream');
 const { detectEmotion, buildSystemPrompt } = require('./services/emotionDetector');
+const { searchWeb, fetchPageContent } = require('./services/webSearch');
+const memoryStore = require('./services/memoryStore');
 
 app.get('/api/voices', (req, res) => {
     res.json({
@@ -668,7 +701,7 @@ app.get('/api/recipes/pending-blob', (req, res) => {
 recipeEngine.start();
 
 // ── Vision / Image Analysis Endpoint ──
-app.post('/api/chat/vision', async (req, res) => {
+app.post('/api/chat/vision', optionalAuth, async (req, res) => {
     try {
         const { message, imageBase64, imageMimeType, voice, rate, voiceMode, speakingRate, language } = req.body || {};
         const voicePrefs = resolveVoicePrefs(
@@ -723,7 +756,7 @@ app.post('/api/chat/vision', async (req, res) => {
     }
 });
 
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', optionalAuth, async (req, res) => {
     try {
         const { message, voice, rate, voiceMode, speakingRate, language } = req.body || {};
         const voicePrefs = resolveVoicePrefs(
@@ -779,6 +812,13 @@ app.post('/api/chat', async (req, res) => {
                 apiUsage.infoQueries++;
                 apiUsage.ttsCalls++;
                 logEvent('info', `${infoQuery.type} query`, message);
+                // Store in memory
+                if (req.userId) {
+                  try {
+                    await memoryStore.add(groq, req.userId, 'user', 'user', message.trim());
+                    await memoryStore.add(groq, req.userId, 'nexus', 'assistant', infoReply);
+                  } catch {}
+                }
                 return res.json({
                     text: infoReply,
                     ...speech,
@@ -787,17 +827,8 @@ app.post('/api/chat', async (req, res) => {
                 });
             } catch (infoError) {
                 console.error('[NEXUS Info] Failed:', infoQuery.type, infoError.message);
-                const failReply = `Sorry, ${infoQuery.type} data fetch nahi ho paya: ${infoError.message}`;
-                const speech = await synthesizeSpeech(failReply, voicePrefs, TTS_VOICE);
-                apiUsage.ttsCalls++;
                 logEvent('error', `Info query failed: ${infoQuery.type}`, infoError.message);
-                return res.status(502).json({
-                    text: failReply,
-                    ...speech,
-                    model: 'nexus-info',
-                    toolUsed: infoQuery.type,
-                    error: infoError.message,
-                });
+                // Fall through to LLM + RAG instead of returning error
             }
         }
 
@@ -855,11 +886,61 @@ app.post('/api/chat', async (req, res) => {
         logEvent('llm', 'Groq LLM call', message);
 
         const emotion = detectEmotion(message.trim());
-        const systemContent = buildSystemPrompt(
+        let systemContent = buildSystemPrompt(
           'You are NEXUS, a concise voice assistant. Reply naturally in the same language or Hinglish style as the user. Keep responses voice-friendly and avoid markdown unless absolutely needed.',
           emotion,
         );
         if (emotion) logEvent('emotion', `Detected: ${emotion.emotion} (score: ${emotion.score})`);
+
+        // ── RAG: Web Search + Memory Retrieval ──
+        let ragContext = '';
+        const userId = req.userId || null;
+        const needsMemory = userId && detectMemoryQuery(message);
+        const needsWebSearch = detectSearchQuery(message);
+
+        if (needsMemory || needsWebSearch) {
+          // Retrieve past conversation memory
+          if (needsMemory && userId) {
+            try {
+              const memories = await memoryStore.query(groq, userId, message, 5);
+              if (memories.length > 0) {
+                ragContext += '\nPast conversation context:\n' + memories.map(m =>
+                  `[${m.role}]: ${m.content}`
+                ).join('\n') + '\n';
+                logEvent('rag', 'Memory retrieved', `${memories.length} entries`);
+              }
+            } catch (memErr) {
+              logEvent('error', 'Memory retrieval failed', memErr.message);
+            }
+          }
+
+          // Web search for external info (skip if only memory query)
+          if (needsWebSearch) {
+            const searchQuery = message
+              .replace(/search|find|look up|google|khoj|dhoondh|dhundo|pata karo|kya\s+hota\s+hai|kya\s+hai|batao|tell me|about|info|yaad\s*dilao|yaad\s*karo|kal|pehle/gi, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (searchQuery.length > 3) {
+              try {
+                const webResults = await searchWeb(searchQuery, 3);
+                if (webResults.snippets.length > 0) {
+                  ragContext += '\nWeb search results:\n' + webResults.snippets.map((s, i) =>
+                    `[${i + 1}] ${s}`
+                  ).join('\n') + '\nSources: ' + webResults.sources.map(s => s.url).join(', ');
+                  apiUsage.infoQueries++;
+                  logEvent('rag', 'Web search for chat', searchQuery);
+                }
+              } catch (webErr) {
+                logEvent('error', 'Web search failed in chat', webErr.message);
+              }
+            }
+          }
+        }
+
+        if (ragContext) {
+          systemContent += '\n\nRelevant context (use this to answer the user):\n' + ragContext;
+          logEvent('rag', 'Context injected', `${ragContext.length} chars`);
+        }
 
         const chatCompletion = await groq.chat.completions.create({
             messages: [
@@ -879,6 +960,16 @@ app.post('/api/chat', async (req, res) => {
             return res.status(502).json({ error: 'LLM returned an empty response' });
         }
 
+        // Store in memory
+        if (userId) {
+          try {
+            await memoryStore.add(groq, userId, 'user', 'user', message.trim());
+            await memoryStore.add(groq, userId, 'nexus', 'assistant', textResponse);
+          } catch (memErr) {
+            logEvent('error', 'Memory store failed', memErr.message);
+          }
+        }
+
         const speech = await synthesizeSpeech(textResponse, voicePrefs, TTS_VOICE);
         apiUsage.ttsCalls++;
 
@@ -887,6 +978,7 @@ app.post('/api/chat', async (req, res) => {
             ...speech,
             model: GROQ_MODEL,
             emotion: emotion ? emotion.emotion : null,
+            ragUsed: Boolean(ragContext),
         });
 
     } catch (err) {
