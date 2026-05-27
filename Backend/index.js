@@ -36,6 +36,7 @@ const TTS_VOICE = process.env.TTS_VOICE || 'en-IN-NeerjaNeural';
 
 // ── Model Router ──
 const modelRouter = require('./services/modelRouter');
+const systemCommander = require('./services/systemCommander');
 
 let serverModelPrefs = {
   provider: 'groq',
@@ -940,6 +941,9 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
         );
         if (emotion) logEvent('emotion', `Detected: ${emotion.emotion} (score: ${emotion.score})`);
 
+        // Add system tool capabilities
+        systemContent += '\n\n' + systemCommander.buildToolSystemPrompt();
+
         // ── RAG: Web Search + Memory Retrieval ──
         let ragContext = '';
         const userId = req.userId || null;
@@ -1007,6 +1011,31 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
             return res.status(502).json({ error: 'LLM returned an empty response' });
         }
 
+        // ── Execute any tool calls from LLM response ──
+        let displayText = textResponse;
+        let toolResults = [];
+        const toolCalls = systemCommander.parseToolCalls(textResponse);
+        for (const tc of toolCalls) {
+          try {
+            const toolResult = await systemCommander.executeTool(tc);
+            toolResults.push({ type: tc.type, action: tc.action, result: toolResult });
+            logEvent('tool', `${tc.type}/${tc.action}`, JSON.stringify(tc.params || {}).slice(0, 200));
+            apiUsage.systemCommands++;
+          } catch (toolErr) {
+            toolResults.push({ type: tc.type, action: tc.action, error: toolErr.message });
+            logEvent('error', `Tool failed: ${tc.type}/${tc.action}`, toolErr.message);
+          }
+        }
+        if (toolCalls.length > 0) {
+          displayText = textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
+          if (!displayText) {
+            const toolSummary = toolResults.map(t =>
+              t.error ? `${t.type}/${t.action}: Error - ${t.error}` : `${t.type}/${t.action}: Ok`
+            ).join(', ');
+            displayText = `Done: ${toolSummary}`;
+          }
+        }
+
         // Store in memory
         if (userId) {
           try {
@@ -1017,18 +1046,20 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
           }
         }
 
-        const speech = await synthesizeSpeech(textResponse, voicePrefs, TTS_VOICE);
+        const speech = await synthesizeSpeech(displayText, voicePrefs, TTS_VOICE);
         apiUsage.ttsCalls++;
         apiUsage.llmCalls++;
 
         res.json({
-            text: textResponse,
+            text: displayText,
             ...speech,
             model: `${result.provider}/${result.model}`,
             emotion: emotion ? emotion.emotion : null,
             ragUsed: Boolean(ragContext),
             category: result.category,
             fallbacksUsed: result.fallbacksUsed,
+            toolCalls: toolCalls.length > 0 ? toolCalls.map(t => ({ type: t.type, action: t.action })) : undefined,
+            toolResults: toolResults.length > 0 ? toolResults : undefined,
         });
 
     } catch (err) {
@@ -1079,6 +1110,43 @@ app.post('/api/execute', express.raw({ type: '*/*', limit: '64kb' }), async (req
     sendEvent('error', { message: err.message });
     sendEvent('done', { exitCode: -1, duration: 0 });
     if (!res.writableEnded) res.end();
+  }
+});
+
+// ── System Commander API ──
+app.post('/api/system/:action', async (req, res) => {
+  try {
+    const { action } = req.params;
+    const params = req.body || {};
+    logEvent('system', `API tool: ${action}`, JSON.stringify(params).slice(0, 200));
+
+    let result;
+    switch (action) {
+      case 'file-read': result = await systemCommander.readFile(params.path); break;
+      case 'file-write': result = await systemCommander.writeFile(params.path, params.content); break;
+      case 'file-list': result = await systemCommander.listDir(params.path); break;
+      case 'project-create': result = await systemCommander.createProject(params.name, params.structure); break;
+      case 'git-status': result = await systemCommander.gitRun('status', params.path); break;
+      case 'git-log': result = await systemCommander.gitRun('log', params.path); break;
+      case 'git-commit': result = await systemCommander.gitRun('commit', params.path, { message: params.message }); break;
+      case 'git-diff': result = await systemCommander.gitRun('diff', params.path); break;
+      case 'git-push': result = await systemCommander.gitRun('push', params.path); break;
+      case 'git-pull': result = await systemCommander.gitRun('pull', params.path); break;
+      case 'git-branch': result = await systemCommander.gitRun('branch', params.path); break;
+      case 'browser': result = await systemCommander.browserAction(params.action || 'open', params); break;
+      case 'system-info': result = await systemCommander.systemControl('system-info'); break;
+      case 'system-volume': result = await systemCommander.systemControl('volume', params); break;
+      case 'system-brightness': result = await systemCommander.systemControl('brightness', params); break;
+      case 'system-open': result = await systemCommander.systemControl('open-app', params); break;
+      case 'system-processes': result = await systemCommander.systemControl('process-list'); break;
+      case 'system-kill': result = await systemCommander.systemControl('kill-process', params); break;
+      default: return res.status(400).json({ ok: false, error: `Unknown action: ${action}` });
+    }
+
+    res.json({ ok: true, action, result });
+  } catch (err) {
+    logEvent('error', `System API error: ${req.params.action}`, err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
