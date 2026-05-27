@@ -481,6 +481,7 @@ const { createTtsStreamHandler } = require('./services/ttsStream');
 const { detectEmotion, buildSystemPrompt } = require('./services/emotionDetector');
 const { searchWeb, fetchPageContent } = require('./services/webSearch');
 const memoryStore = require('./services/memoryStore');
+const { executeCode } = require('./services/codeRunner');
 
 app.get('/api/voices', (req, res) => {
     res.json({
@@ -1035,6 +1036,50 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
         logEvent('error', 'Chat API error', err.message);
         res.status(500).json({ error: err.message || 'Backend request failed' });
     }
+});
+
+// ── Code Execution Sandbox ──
+app.post('/api/execute', express.raw({ type: 'text/event-stream', limit: '64kb' }), async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+
+  const sendEvent = (event, data) => {
+    if (res.writableEnded) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const { code, language = 'auto' } = body || {};
+
+    if (!code || !code.trim()) {
+      sendEvent('error', { message: 'No code provided' });
+      sendEvent('done', { exitCode: 1, duration: 0 });
+      res.end();
+      return;
+    }
+
+    logEvent('code', `Executing ${language}`, `${code.length} chars`);
+
+    await executeCode({
+      language,
+      code,
+      onOutput: (text) => sendEvent('output', { type: 'stdout', text }),
+      onError: (text) => sendEvent('output', { type: 'stderr', text }),
+      onDone: (result) => {
+        sendEvent('done', result);
+        res.end();
+      },
+    });
+  } catch (err) {
+    sendEvent('error', { message: err.message });
+    sendEvent('done', { exitCode: -1, duration: 0 });
+    if (!res.writableEnded) res.end();
+  }
 });
 
 // ── Production: serve built frontend ──

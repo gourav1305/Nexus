@@ -1,0 +1,255 @@
+.codesandbox-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 255, 136, 0.15);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.codesandbox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.cs-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cs-header-left h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #e0e0e0;
+  letter-spacing: 0.5px;
+}
+
+.cs-icon {
+  color: #00ff88;
+}
+
+.cs-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cs-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #ccc;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cs-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.cs-btn.primary {
+  background: linear-gradient(135deg, #00c853, #00e676);
+  color: #000;
+  border-color: #00e676;
+  font-weight: 600;
+}
+
+.cs-btn.primary:hover {
+  box-shadow: 0 0 20px rgba(0, 230, 118, 0.3);
+}
+
+.cs-btn.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.cs-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: #888;
+}
+
+.cs-btn.ghost:hover {
+  color: #00ff88;
+}
+
+.cs-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.cs-editor-pane {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cs-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.cs-lang-select {
+  display: flex;
+  gap: 4px;
+}
+
+.cs-lang-btn {
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #888;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cs-lang-btn:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.cs-lang-btn.active {
+  color: #00ff88;
+  border-color: rgba(0, 255, 136, 0.3);
+  background: rgba(0, 255, 136, 0.08);
+}
+
+.cs-chars {
+  font-size: 11px;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+}
+
+.cs-editor {
+  flex: 1;
+  padding: 14px 16px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #e0e0e0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  border: none;
+  outline: none;
+  resize: none;
+  tab-size: 2;
+}
+
+.cs-editor::placeholder {
+  color: #444;
+}
+
+.cs-output-pane {
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.cs-output-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: #888;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.cs-exit-code {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cs-output {
+  flex: 1;
+  padding: 10px 14px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.cs-output::-webkit-scrollbar {
+  width: 6px;
+}
+
+.cs-output::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.cs-output-empty {
+  color: #444;
+  text-align: center;
+  padding: 40px 20px;
+  font-size: 14px;
+}
+
+.cs-output-empty strong {
+  color: #00ff88;
+}
+
+.cs-line {
+  padding: 1px 0;
+  min-height: 18px;
+}
+
+.cs-line-stdout {
+  color: #d4d4d4;
+}
+
+.cs-line-stderr {
+  color: #ff8a65;
+}
+
+.cs-line-system {
+  color: #666;
+  font-style: italic;
+  font-size: 12px;
+}
+
+.cs-line-error {
+  color: #ff4466;
+  font-weight: 600;
+}
+
+.cs-line-warn {
+  color: #ffa726;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}

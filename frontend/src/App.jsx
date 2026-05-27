@@ -7,6 +7,7 @@ import CommandInput from './component/CommandInput';
 import Dashboard from './component/Dashboard';
 import DataCore from './component/DataCore';
 import Recipes from './component/Recipes';
+import CodeSandbox from './component/CodeSandbox';
 import LoginPage from './component/LoginPage';
 import AmbientBackground from './component/AmbientBackground';
 import { MessageSquare, X } from 'lucide-react';
@@ -313,7 +314,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-      <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' ? 'view-dashboard' : ''}`}>
+      <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' ? 'view-dashboard' : ''}`}>
         {currentView === 'nexus' ? (
           <Blob2
             config={blobConfig}
@@ -328,6 +329,8 @@ function App() {
           <DataCore onSwitchToNexus={() => setCurrentView('nexus')} />
         ) : currentView === 'recipes' ? (
           <Recipes onSwitchToNexus={() => setCurrentView('nexus')} token={token} />
+        ) : currentView === 'codesandbox' ? (
+          <CodeSandbox onSwitchToNexus={() => setCurrentView('nexus')} />
         ) : (
           <Dashboard
             assistantEnabled={assistantEnabled}

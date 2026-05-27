@@ -3,7 +3,7 @@ import './Navbar.css';
 import {
   Hexagon, Search, Bell, Settings, Move, LayoutDashboard, Cpu, Database,
   Palette, Volume2, Sliders, Info, RotateCw, Eye, EyeOff,
-  Zap, RefreshCw, Trash2, Music, Mic, TestTube, Activity, LogOut,
+  Zap, RefreshCw, Trash2, Music, Mic, TestTube, Activity, LogOut, Terminal,
 } from 'lucide-react';
 import {
   VOICE_MODES,
@@ -335,6 +335,16 @@ const Navbar = ({
           >
             <Activity size={16} className="nav-icon" />
             <span className="nav-text">Recipes</span>
+          </a>
+        </li>
+        <li>
+          <a href="#"
+            className={`nav-item ${currentView === 'codesandbox' ? 'active' : ''}`}
+            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('codesandbox'); }}
+            onMouseEnter={handleNavHover}
+          >
+            <Terminal size={16} className="nav-icon" />
+            <span className="nav-text">Sandbox</span>
           </a>
         </li>
         <li style={{ position: 'relative' }}>
