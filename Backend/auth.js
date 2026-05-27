@@ -223,4 +223,45 @@ router.post('/recipes/:id/toggle', authMiddleware, (req, res) => {
   res.json({ ok: true, recipe });
 });
 
+// ── Todos ──
+router.get('/todos', authMiddleware, (req, res) => {
+  res.json({ ok: true, todos: db.getTodos(req.userId) });
+});
+
+router.post('/todos', authMiddleware, (req, res) => {
+  const { text, priority, dueDate } = req.body || {};
+  if (!text) return res.status(400).json({ ok: false, error: 'text is required' });
+  const todo = db.addTodo(req.userId, text, { priority, dueDate });
+  res.status(201).json({ ok: true, todo });
+});
+
+router.put('/todos/:id', authMiddleware, (req, res) => {
+  const todo = db.updateTodo(req.params.id, req.userId, req.body);
+  if (!todo) return res.status(404).json({ ok: false, error: 'Todo not found' });
+  res.json({ ok: true, todo });
+});
+
+router.delete('/todos/:id', authMiddleware, (req, res) => {
+  const deleted = db.deleteTodo(req.params.id, req.userId);
+  if (!deleted) return res.status(404).json({ ok: false, error: 'Todo not found' });
+  res.json({ ok: true });
+});
+
+// ── Calendar ──
+router.get('/calendar', authMiddleware, (req, res) => {
+  const { start, end } = req.query;
+  res.json({ ok: true, events: db.getEvents(req.userId, start, end) });
+});
+
+router.post('/calendar', authMiddleware, (req, res) => {
+  const event = db.addEvent(req.userId, req.body);
+  res.status(201).json({ ok: true, event });
+});
+
+router.delete('/calendar/:id', authMiddleware, (req, res) => {
+  const deleted = db.deleteEvent(req.params.id, req.userId);
+  if (!deleted) return res.status(404).json({ ok: false, error: 'Event not found' });
+  res.json({ ok: true });
+});
+
 module.exports = { router, authMiddleware, optionalAuth };

@@ -472,18 +472,91 @@ const detectSystemCommand = (message) => {
         };
     }
 
-    if (/\b(restart|reboot)\b/.test(text)) {
+    // To-Do List Commands
+    if (/\b(add|put|write|nawa|likho|rakhu|rakh)\b/.test(text) && /\b(todo|task|kaam|list)\b/.test(text)) {
+        const todoMatch = text.match(/(?:add|put|write|nawa|likho|rakhu|rakh)\s+(?:todo|task|kaam|list)?\s*(.+)/);
+        const todoText = todoMatch?.[1]?.trim();
+        if (todoText) {
+            return {
+                name: 'add_todo',
+                reply: `Theek hai, maine list me add kar diya: "${todoText}"`,
+                run: async (userId) => {
+                    if (!userId) throw new Error('User not authenticated');
+                    return db.addTodo(userId, todoText);
+                }
+            };
+        }
+    }
+
+    if (/\b(show|tell|check|dekh|dikhao|batao)\b/.test(text) && /\b(todo|task|kaam|list)\b/.test(text)) {
         return {
-            name: 'system_restart_init',
-            reply: 'NEXUS command locked: Are you sure you want to restart the computer? Please say "Confirm Restart" to proceed.',
-            requiresConfirmation: true,
-            confirmKeyword: 'restart',
-            run: () => runPowerShell('shutdown /r /t 10 /f'),
+            name: 'list_todos',
+            reply: 'Aapki current list ye rahi.',
+            run: async (userId) => {
+                if (!userId) throw new Error('User not authenticated');
+                return db.getTodos(userId);
+            }
+        };
+    }
+
+    // Summarization Command
+    if (/\b(summarize|summary|nichod|chhota karo|shorten|brief)\b/.test(text)) {
+        const topicMatch = text.match(/(?:summarize|summary|nichod|chhota karo|shorten|brief)\s+(?:of|this|the|is|ka|ki|ko)?\s*(.+)/);
+        const topic = topicMatch?.[1]?.trim();
+        return {
+            name: 'summarize_content',
+            reply: topic ? `Wait, main "${topic}" ko summarize kar rha hun...` : 'Theek hai, main summarize kar raha hun.',
+            run: async (userId, fullMsg) => {
+                return handleSummarization(topic || fullMsg, userId);
+            }
+        };
+    }
+
+    // Calendar Commands
+    if (/\b(schedule|events|meetings|mulaqat|calendar)\b/.test(text)) {
+        return {
+            name: 'list_calendar_events',
+            reply: 'Checking your schedule...',
+            run: async (userId) => {
+                if (!userId) throw new Error('User not authenticated');
+                const now = Date.now();
+                const endOfDay = new Date().setHours(23, 59, 59, 999);
+                return db.getEvents(userId, now, endOfDay);
+            }
         };
     }
 
     return null;
 };
+
+// ── Summarization Helper ──
+async function handleSummarization(input, userId) {
+    logEvent('system', 'Summarization requested', input);
+    
+    let contentToSummarize = input;
+    
+    // Check if input is a file path
+    if (input.includes(':') || input.includes('\\') || input.includes('/')) {
+        try {
+            const result = await systemCommander.readFile(input);
+            if (result.content) contentToSummarize = result.content;
+        } catch (e) {
+            // Not a file, proceed as text
+        }
+    }
+
+    const prompt = `Please provide a concise and clear summary of the following content. Use bullet points if necessary. Keep it under 200 words.
+    
+    Content:
+    ${contentToSummarize.slice(0, 10000)}`;
+
+    const result = await modelRouter.routeQuery(serverModelPrefs, [
+        { role: 'system', content: 'You are a helpful assistant that summarizes text efficiently.' },
+        { role: 'user', content: prompt }
+    ]);
+
+    return result.text;
+}
 
 
 const { synthesizeSpeech } = require('./ttsEngine');

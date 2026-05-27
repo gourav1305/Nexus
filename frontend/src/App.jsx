@@ -9,6 +9,8 @@ import Recipes from './component/Recipes';
 import CodeSandbox from './component/CodeSandbox';
 import ScreenAnalyzer from './component/ScreenAnalyzer';
 import LoginPage from './component/LoginPage';
+import Todos from './component/Todos';
+import Calendar from './component/Calendar';
 import AmbientBackground from './component/AmbientBackground';
 import { MessageSquare, X } from 'lucide-react';
 import { playStartupHum, playErrorSound, playSuccessSound, playHoverBlip, playClickBlip } from './utils/audioFeedback';
@@ -338,7 +340,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-      <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' || currentView === 'screen' ? 'view-dashboard' : ''}`}>
+  <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' || currentView === 'screen' || currentView === 'todos' || currentView === 'calendar' ? 'view-dashboard' : ''}`}>
         {currentView === 'nexus' ? (
           <Suspense fallback={<div className="nexus-loading">Initializing Neural Interface...</div>}>
             <Blob2
@@ -365,6 +367,10 @@ function App() {
           <Recipes onSwitchToNexus={() => setCurrentView('nexus')} token={token} />
         ) : currentView === 'codesandbox' ? (
           <CodeSandbox onSwitchToNexus={() => setCurrentView('nexus')} />
+        ) : currentView === 'todos' ? (
+          <Todos user={user} token={token} />
+        ) : currentView === 'calendar' ? (
+          <Calendar user={user} token={token} />
         ) : (
           <Dashboard
             assistantEnabled={assistantEnabled}

@@ -61,8 +61,33 @@ function initSchema() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS todos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      completed INTEGER NOT NULL DEFAULT 0,
+      priority TEXT DEFAULT 'normal',
+      due_date INTEGER,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      start_time INTEGER NOT NULL,
+      end_time INTEGER NOT NULL,
+      location TEXT DEFAULT '',
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_chat_history_user ON chat_history(user_id);
     CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id);
+    CREATE INDEX IF NOT EXISTS idx_todos_user ON todos(user_id);
+    CREATE INDEX IF NOT EXISTS idx_calendar_user ON calendar_events(user_id);
     CREATE INDEX IF NOT EXISTS idx_chat_history_ts ON chat_history(timestamp);
   `);
 }
@@ -246,6 +271,86 @@ function normalizeRecipe(row) {
   };
 }
 
+// ── Todos ──
+function getTodos(userId) {
+  return getDb().prepare(
+    'SELECT * FROM todos WHERE user_id = ? ORDER BY created_at DESC'
+  ).all(userId).map(normalizeTodo);
+}
+
+function addTodo(userId, text, options = {}) {
+  const stmt = getDb().prepare(`
+    INSERT INTO todos (user_id, text, priority, due_date)
+    VALUES (?, ?, ?, ?)
+  `);
+  const result = stmt.run(userId, text, options.priority || 'normal', options.dueDate || null);
+  return getTodoById(result.lastInsertRowid, userId);
+}
+
+function getTodoById(id, userId) {
+  const row = getDb().prepare('SELECT * FROM todos WHERE id = ? AND user_id = ?').get(id, userId);
+  return row ? normalizeTodo(row) : null;
+}
+
+function updateTodo(id, userId, updates) {
+  const existing = getDb().prepare('SELECT * FROM todos WHERE id = ? AND user_id = ?').get(id, userId);
+  if (!existing) return null;
+  
+  getDb().prepare(`
+    UPDATE todos SET text = ?, completed = ?, priority = ?, due_date = ?
+    WHERE id = ? AND user_id = ?
+  `).run(
+    updates.text ?? existing.text,
+    updates.completed !== undefined ? (updates.completed ? 1 : 0) : existing.completed,
+    updates.priority ?? existing.priority,
+    updates.dueDate ?? existing.due_date,
+    id, userId
+  );
+  return getTodoById(id, userId);
+}
+
+function deleteTodo(id, userId) {
+  return getDb().prepare('DELETE FROM todos WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+}
+
+function normalizeTodo(row) {
+  return {
+    id: row.id,
+    text: row.text,
+    completed: Boolean(row.completed),
+    priority: row.priority,
+    dueDate: row.due_date,
+    createdAt: row.created_at,
+  };
+}
+
+// ── Calendar ──
+function getEvents(userId, start, end) {
+  let query = 'SELECT * FROM calendar_events WHERE user_id = ?';
+  const params = [userId];
+  if (start) { query += ' AND start_time >= ?'; params.push(start); }
+  if (end) { query += ' AND end_time <= ?'; params.push(end); }
+  query += ' ORDER BY start_time ASC';
+  return getDb().prepare(query).all(...params);
+}
+
+function addEvent(userId, data) {
+  const stmt = getDb().prepare(`
+    INSERT INTO calendar_events (user_id, title, description, start_time, end_time, location)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const result = stmt.run(userId, data.title, data.description || '', data.startTime, data.endTime, data.location || '');
+  return getEventById(result.lastInsertRowid, userId);
+}
+
+function getEventById(id, userId) {
+  return getDb().prepare('SELECT * FROM calendar_events WHERE id = ? AND user_id = ?').get(id, userId);
+}
+
+function deleteEvent(id, userId) {
+  return getDb().prepare('DELETE FROM calendar_events WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+}
+
 function close() {
   if (db) { db.close(); db = null; }
 }
@@ -258,5 +363,7 @@ module.exports = {
   getSettings, updateBlobConfig, updateUiConfig, updateAssistantSettings,
   getRecipes, getRecipeById, createRecipe, updateRecipeById,
   deleteRecipeById, toggleRecipeById, updateRecipeRun,
+  getTodos, addTodo, updateTodo, deleteTodo,
+  getEvents, addEvent, deleteEvent,
   close,
 };

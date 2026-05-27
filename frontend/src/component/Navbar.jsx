@@ -3,7 +3,7 @@ import './Navbar.css';
 import {
   Hexagon, Settings, Move, LayoutDashboard, Cpu, Database,
   Palette, Volume2, Sliders, Info, Eye, Search,
-  Zap, Trash2, Music, TestTube, Activity, LogOut, Terminal, Bot, Monitor,
+  Zap, Trash2, Music, TestTube, Activity, LogOut, Terminal, Bot, Monitor, ListTodo, Calendar,
 } from 'lucide-react';
 import {
   VOICE_MODES,
@@ -297,116 +297,100 @@ const Navbar = ({
       </div>
 
       <ul className="nav-links">
-        <li>
-          <a href="#"
-            className={`nav-item ${currentView === 'dashboard' ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('dashboard'); }}
-            onMouseEnter={handleNavHover}
-          >
-            <LayoutDashboard size={16} className="nav-icon" />
-            <span className="nav-text">Dashboard</span>
-          </a>
+        {/* Nexus Group */}
+        <li className="nav-group">
+          <div className="group-trigger">Nexus</div>
+          <div className="group-dropdown">
+            <a href="#" className={`nav-item ${currentView === 'nexus' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('nexus'); }}>
+              <Cpu size={14} /> <span>Nexus Core</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'dashboard' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('dashboard'); }}>
+              <LayoutDashboard size={14} /> <span>Dashboard</span>
+            </a>
+          </div>
         </li>
-        <li>
-          <a href="#"
-            className={`nav-item ${currentView === 'nexus' ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('nexus'); }}
-            onMouseEnter={handleNavHover}
-          >
-            <Cpu size={16} className="nav-icon" />
-            <span className="nav-text">Nexus Core</span>
-          </a>
-        </li>
-        <li>
-          <a href="#"
-            className={`nav-item ${currentView === 'datacore' ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('datacore'); }}
-            onMouseEnter={handleNavHover}
-          >
-            <Database size={16} className="nav-icon" />
-            <span className="nav-text">Data Core</span>
-          </a>
-        </li>
-        <li>
-          <a href="#"
-            className={`nav-item ${currentView === 'recipes' ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('recipes'); }}
-            onMouseEnter={handleNavHover}
-          >
-            <Activity size={16} className="nav-icon" />
-            <span className="nav-text">Recipes</span>
-          </a>
-        </li>
-        <li>
-          <a href="#"
-            className={`nav-item ${currentView === 'codesandbox' ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('codesandbox'); }}
-            onMouseEnter={handleNavHover}
-          >
-            <Terminal size={16} className="nav-icon" />
-            <span className="nav-text">Sandbox</span>
-          </a>
-        </li>
-        <li>
-          <a href="#"
-            className={`nav-item ${currentView === 'agent' ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('agent'); }}
-            onMouseEnter={handleNavHover}
-          >
-            <Bot size={16} className="nav-icon" />
-            <span className="nav-text">Agent</span>
-          </a>
-        </li>
-        <li>
-          <a href="#"
-            className={`nav-item ${currentView === 'screen' ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('screen'); }}
-            onMouseEnter={handleNavHover}
-          >
-            <Monitor size={16} className="nav-icon" />
-            <span className="nav-text">Screen</span>
-          </a>
-        </li>
-        <li style={{ position: 'relative' }}>
-          <a href="#" className={`nav-item ${showSettings ? 'active' : ''}`} onClick={handleSettingsClick} onMouseEnter={handleNavHover}>
-            <Settings size={16} className="nav-icon" />
-            <span className="nav-text">Settings</span>
-          </a>
-          {showSettings && (
-            <div className="settings-dropdown">
-              {/* Search */}
-              <div className="settings-search-wrap">
-                <Search size={14} className="settings-search-icon" />
-                <input
-                  type="text"
-                  className="settings-search-input"
-                  placeholder="Search settings..."
-                  value={settingsSearch}
-                  onChange={(e) => setSettingsSearch(e.target.value)}
-                />
-              </div>
 
-              {/* Tabs */}
-              <div className="settings-tabs">
-                {TABS.map((tab) => {
-                  const Icon = tab.icon;
-                  return (
-                    <button
-                      key={tab.id}
-                      className={`settings-tab ${settingsTab === tab.id ? 'active' : ''}`}
-                      onClick={() => { setSettingsTab(tab.id); setSettingsSearch(''); }}
-                    >
-                      <Icon size={14} />
-                      <span>{tab.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
+        {/* Intelligence Group */}
+        <li className="nav-group">
+          <div className="group-trigger">Intelligence</div>
+          <div className="group-dropdown">
+            <a href="#" className={`nav-item ${currentView === 'agent' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('agent'); }}>
+              <Bot size={14} /> <span>Agent</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'codesandbox' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('codesandbox'); }}>
+              <Terminal size={14} /> <span>Sandbox</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'screen' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('screen'); }}>
+              <Monitor size={14} /> <span>Screen</span>
+            </a>
+          </div>
+        </li>
 
-              {/* Panel Content */}
-              {panels[settingsTab]()}
+        {/* Efficiency Group */}
+        <li className="nav-group">
+          <div className="group-trigger">Efficiency</div>
+          <div className="group-dropdown">
+            <a href="#" className={`nav-item ${currentView === 'todos' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('todos'); }}>
+              <ListTodo size={14} /> <span>Tasks</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'calendar' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('calendar'); }}>
+              <Calendar size={14} /> <span>Calendar</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'recipes' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('recipes'); }}>
+              <Activity size={14} /> <span>Recipes</span>
+            </a>
+          </div>
+        </li>
+
+        {/* System Group */}
+        <li className="nav-group">
+          <div className="group-trigger">System</div>
+          <div className="group-dropdown">
+            <a href="#" className={`nav-item ${currentView === 'datacore' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('datacore'); }}>
+              <Database size={14} /> <span>Data Core</span>
+            </a>
+            <div className="nav-item-divider"></div>
+            <div style={{ position: 'relative' }}>
+              <a href="#" className={`nav-item ${showSettings ? 'active' : ''}`} onClick={handleSettingsClick}>
+                <Settings size={14} /> <span>Settings</span>
+              </a>
+              {showSettings && (
+                <div className="settings-dropdown">
+                  {/* Search */}
+                  <div className="settings-search-wrap">
+                    <Search size={14} className="settings-search-icon" />
+                    <input
+                      type="text"
+                      className="settings-search-input"
+                      placeholder="Search settings..."
+                      value={settingsSearch}
+                      onChange={(e) => setSettingsSearch(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Tabs */}
+                  <div className="settings-tabs">
+                    {TABS.map((tab) => {
+                      const Icon = tab.icon;
+                      return (
+                        <button
+                          key={tab.id}
+                          className={`settings-tab ${settingsTab === tab.id ? 'active' : ''}`}
+                          onClick={() => { setSettingsTab(tab.id); setSettingsSearch(''); }}
+                        >
+                          <Icon size={14} />
+                          <span>{tab.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Panel Content */}
+                  {panels[settingsTab]()}
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </li>
       </ul>
 
