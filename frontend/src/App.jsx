@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import './App.css';
-import Blob2 from './component/blob2';
 import Navbar from './component/Navbar';
 import ChatHistory from './component/ChatHistory';
 import CommandInput from './component/CommandInput';
@@ -12,6 +11,10 @@ import LoginPage from './component/LoginPage';
 import AmbientBackground from './component/AmbientBackground';
 import { MessageSquare, X } from 'lucide-react';
 import { playStartupHum, playErrorSound, playSuccessSound, playHoverBlip, playClickBlip } from './utils/audioFeedback';
+import { extractArtifacts } from './utils/artifactUtils';
+
+const Blob2 = lazy(() => import('./component/blob2'));
+const ArtifactPanel = lazy(() => import('./component/ArtifactPanel'));
 import {
   loadBlobConfig, loadAssistantSettings, loadUiConfig,
   saveBlobConfig, saveAssistantSettings, saveUiConfig,
@@ -48,6 +51,8 @@ function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [externalResponse, setExternalResponse] = useState(null);
+  const [artifacts, setArtifacts] = useState([]);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
 
   const [blobConfig, setBlobConfig] = useState(loadBlobConfig);
   const [uiConfig, setUiConfig] = useState(loadUiConfig);
@@ -214,6 +219,14 @@ function App() {
       if (!res.ok) throw new Error(data.error || 'Server error');
       addHistoryItem('assistant', data.text);
       playSuccessSound();
+
+      // ── Extract artifacts from code blocks ──
+      const newArtifacts = extractArtifacts(data.text, artifacts.length);
+      if (newArtifacts.length > 0) {
+        setArtifacts(prev => [...prev, ...newArtifacts]);
+        setArtifactsOpen(true);
+      }
+
       setExternalResponse({
         text: data.text, userMessage: text,
         audioBase64: data.audioBase64, audioMimeType: data.audioMimeType,
@@ -254,6 +267,15 @@ function App() {
       playErrorSound();
       setExternalResponse({ error: err.message || 'Vision analysis failed', userMessage: displayText });
     } finally { setIsThinking(false); }
+  };
+
+  // ── Artifact handlers ──
+  const handleRemoveArtifact = (id) => {
+    setArtifacts(prev => prev.filter(a => a.id !== id));
+  };
+  const handleClearArtifacts = () => {
+    setArtifacts([]);
+    setArtifactsOpen(false);
   };
 
   const handleResetSettings = () => {
@@ -316,15 +338,17 @@ function App() {
 
       <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' ? 'view-dashboard' : ''}`}>
         {currentView === 'nexus' ? (
-          <Blob2
-            config={blobConfig}
-            setConfig={setBlobConfig}
-            assistantSettings={assistantSettings}
-            assistantEnabled={assistantEnabled}
-            isThinkingExternal={isThinking}
-            externalResponse={externalResponse}
-            onVoiceMessage={handleSendMessage}
-          />
+          <Suspense fallback={<div className="nexus-loading">Initializing Neural Interface...</div>}>
+            <Blob2
+              config={blobConfig}
+              setConfig={setBlobConfig}
+              assistantSettings={assistantSettings}
+              assistantEnabled={assistantEnabled}
+              isThinkingExternal={isThinking}
+              externalResponse={externalResponse}
+              onVoiceMessage={handleSendMessage}
+            />
+          </Suspense>
         ) : currentView === 'datacore' ? (
           <DataCore onSwitchToNexus={() => setCurrentView('nexus')} />
         ) : currentView === 'recipes' ? (
@@ -347,6 +371,14 @@ function App() {
         history={history}
         onClear={clearHistory}
       />
+
+      <Suspense fallback={null}>
+        <ArtifactPanel
+          artifacts={artifacts}
+          onRemove={handleRemoveArtifact}
+          onClear={handleClearArtifacts}
+        />
+      </Suspense>
 
       <button
         className={`history-toggle ${isHistoryOpen ? 'active' : ''}`}

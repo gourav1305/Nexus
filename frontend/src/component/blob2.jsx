@@ -324,8 +324,11 @@ const Blob2 = ({
       }
     };
 
+    const stripCodeBlocks = (text) => text.replace(/```[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n').trim();
+
     const typeAiResponse = (text) => new Promise((resolve) => {
       clearInterval(typingInterval);
+      const cleanText = stripCodeBlocks(text);
       if (!aiTextRef.current) {
         resolve();
         return;
@@ -341,8 +344,8 @@ const Blob2 = ({
         }
 
         index += 1;
-        aiTextRef.current.innerText = text.slice(0, index);
-        if (index >= text.length) {
+        aiTextRef.current.innerText = cleanText.slice(0, index);
+        if (index >= cleanText.length) {
           clearInterval(typingInterval);
           resolve();
         }

@@ -86,7 +86,7 @@ let pendingSystemAction = null;
 const COMMAND_TIMEOUT = 30000;
 
 const apiUsage = {
-    groqCalls: 0,
+    llmCalls: 0,
     ttsCalls: 0,
     systemCommands: 0,
     infoQueries: 0,
@@ -763,7 +763,7 @@ app.post('/api/chat/vision', optionalAuth, async (req, res) => {
         const dataUrl = `data:${imageMimeType || 'image/jpeg'};base64,${imageBase64}`;
         const userText = (message || '').trim() || 'What is in this image? Describe it in detail.';
 
-        apiUsage.groqCalls++;
+        apiUsage.llmCalls++;
         logEvent('llm', 'Vision call', userText);
 
         const messages = [{
@@ -930,8 +930,8 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
             return res.status(500).json({ error: 'GROQ_API_KEY is missing in Backend/.env' });
         }
 
-        apiUsage.groqCalls++;
-        logEvent('llm', 'Groq LLM call', message);
+        apiUsage.llmCalls++;
+        logEvent('llm', 'LLM call', message);
 
         const emotion = detectEmotion(message.trim());
         let systemContent = buildSystemPrompt(
@@ -1019,7 +1019,7 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
 
         const speech = await synthesizeSpeech(textResponse, voicePrefs, TTS_VOICE);
         apiUsage.ttsCalls++;
-        apiUsage.groqCalls++;
+        apiUsage.llmCalls++;
 
         res.json({
             text: textResponse,
@@ -1039,7 +1039,7 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
 });
 
 // ── Code Execution Sandbox ──
-app.post('/api/execute', express.raw({ type: 'text/event-stream', limit: '64kb' }), async (req, res) => {
+app.post('/api/execute', express.raw({ type: '*/*', limit: '64kb' }), async (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
