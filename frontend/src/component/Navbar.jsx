@@ -3,7 +3,7 @@ import './Navbar.css';
 import {
   Hexagon, Settings, Move, LayoutDashboard, Cpu, Database,
   Palette, Volume2, Sliders, Info, Eye, Search,
-  Zap, Trash2, Music, TestTube, Activity, LogOut, Terminal, Bot,
+  Zap, Trash2, Music, TestTube, Activity, LogOut, Terminal, Bot, Monitor,
 } from 'lucide-react';
 import {
   VOICE_MODES,
@@ -355,6 +355,16 @@ const Navbar = ({
           >
             <Bot size={16} className="nav-icon" />
             <span className="nav-text">Agent</span>
+          </a>
+        </li>
+        <li>
+          <a href="#"
+            className={`nav-item ${currentView === 'screen' ? 'active' : ''}`}
+            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('screen'); }}
+            onMouseEnter={handleNavHover}
+          >
+            <Monitor size={16} className="nav-icon" />
+            <span className="nav-text">Screen</span>
           </a>
         </li>
         <li style={{ position: 'relative' }}>

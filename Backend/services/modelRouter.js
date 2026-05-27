@@ -68,7 +68,7 @@ function classifyQuery(text) {
 
 // ── Model Selection ──
 const MODEL_MAP = {
-  groq: { code: 'llama-3.3-70b-versatile', creative: 'llama-3.1-8b-instant', math: 'gemma2-9b-it', general: 'llama-3.1-8b-instant', vision: 'meta-llama/llama-4-scout-17b-16e-instruct' },
+  groq: { code: 'llama-3.3-70b-versatile', creative: 'llama-3.1-8b-instant', math: 'gemma2-9b-it', general: 'llama-3.1-8b-instant', vision: 'llama-3.2-11b-vision-preview' },
   openai: { code: 'gpt-4o', creative: 'gpt-4o-mini', math: 'gpt-4o', general: 'gpt-4o-mini', vision: 'gpt-4o' },
   anthropic: { code: 'claude-3-5-sonnet-20241022', creative: 'claude-3-haiku-20240307', math: 'claude-3-sonnet-20240229', general: 'claude-3-haiku-20240307', vision: 'claude-3-5-sonnet-20241022' },
 };
@@ -97,12 +97,8 @@ async function callGroq(messages, model, options = {}) {
 async function callOpenAI(messages, model, options = {}) {
   const openai = PROVIDERS.openai;
   if (!openai) throw new Error('OpenAI provider not initialized');
-  const mapped = messages.map(m => ({
-    role: m.role,
-    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-  }));
   const completion = await openai.chat.completions.create({
-    messages: mapped,
+    messages,
     model,
     temperature: options.temperature ?? 0.7,
     max_tokens: options.maxTokens ?? 4096,
@@ -119,9 +115,18 @@ async function callAnthropic(messages, model, options = {}) {
     if (m.role === 'system') { system = m.content; return false; }
     return true;
   });
+  // Anthropic expects vision content as array of {type, source} or text
   const mapped = msgs.map(m => ({
     role: m.role === 'assistant' ? 'assistant' : 'user',
-    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+    content: typeof m.content === 'string' ? m.content : m.content.map(c => {
+      if (c.type === 'image_url') {
+        // Convert base64 data URL to Anthropic's format
+        const match = c.image_url?.url?.match(/^data:(image\/\w+);base64,(.+)$/);
+        if (match) return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
+        return { type: 'text', text: c.image_url?.url || '' };
+      }
+      return c;
+    }),
   }));
   const completion = await anthropic.messages.create({
     model,
@@ -136,9 +141,17 @@ async function callAnthropic(messages, model, options = {}) {
 async function callOllama(messages, model, options = {}) {
   const host = process.env.OLLAMA_HOST || 'http://localhost:11434';
   const axios = require('axios');
+  // Ollama chat API accepts content as array for vision
   const mapped = messages.map(m => ({
     role: m.role,
-    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+    content: typeof m.content === 'string' ? m.content : m.content.map(c => {
+      if (c.type === 'image_url') {
+        const match = c.image_url?.url?.match(/^data:(image\/\w+);base64,(.+)$/);
+        if (match) return { type: 'image_url', image_url: c.image_url.url };
+        return { type: 'text', text: c.image_url?.url || '' };
+      }
+      return c;
+    }),
   }));
   const res = await axios.post(`${host}/api/chat`, {
     model: model || 'llama3',

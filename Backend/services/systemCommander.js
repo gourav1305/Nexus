@@ -78,9 +78,26 @@ const runPowerShell = (command) => {
   return launchProcess('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], { captureOutput: true });
 };
 
+// ── Detect available drive roots (Windows) ──
+function getDriveRoots() {
+  const roots = [];
+  for (let i = 65; i <= 90; i++) {
+    const letter = String.fromCharCode(i);
+    const root = letter + ':\\';
+    try {
+      if (fs.existsSync(root)) roots.push(root);
+    } catch {}
+  }
+  return roots;
+}
+
 // ── Path safety check ──
 function isPathSafe(targetPath) {
   const resolved = path.resolve(targetPath);
+  // Allow drive roots (Windows)
+  if (/^[A-Z]:\\$/.test(resolved)) {
+    return { safe: true, resolved };
+  }
   if (!ALLOWED_FILE_PATHS.some(allowed => resolved.startsWith(allowed))) {
     return { safe: false, reason: 'Access denied: path outside allowed directories' };
   }
@@ -451,8 +468,85 @@ async function systemControl(action, params = {}) {
   if (action === 'kill-process') {
     const name = params.name || '';
     if (!name) throw new Error('Process name required');
-    await runPowerShell(`Stop-Process -Name ${psQuote(name)} -Force -ErrorAction Stop`);
-    return { action, process: name, message: `Process ${name} terminated` };
+    const r = await runPowerShell(`Stop-Process -Name ${psQuote(name)} -Force -ErrorAction SilentlyContinue; if ($?) { 'Killed' } else { 'Not found' }`);
+    return { action, process: name, result: r.stdout.trim() };
+  }
+
+  // ── Desktop Screenshot ──
+  if (action === 'screenshot') {
+    const ssPath = path.join(os.tmpdir(), `nexus_desktop_${Date.now()}.png`);
+    const script = `
+      [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms');
+      $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
+      $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height);
+      $graphics = [System.Drawing.Graphics]::FromImage($bitmap);
+      $graphics.CopyFromScreen($screen.X, $screen.Y, 0, 0, $bitmap.Size);
+      $bitmap.Save('${ssPath.replace(/\\/g, '\\\\')}', [System.Drawing.Imaging.ImageFormat]::Png);
+      $graphics.Dispose();
+      $bitmap.Dispose();
+      if (Test-Path '${ssPath.replace(/\\/g, '\\\\')}') { Write-Output 'OK:' + (Get-Item '${ssPath.replace(/\\/g, '\\\\')}').Length } else { Write-Output 'FAIL' }
+    `;
+    const ps = await runPowerShell(script);
+    if (!ps.stdout.includes('OK:') && !ps.stdout.includes('OK')) {
+      throw new Error('Screenshot failed: ' + (ps.stderr || ps.stdout || 'unknown error'));
+    }
+    if (!fs.existsSync(ssPath)) throw new Error('Screenshot file not created');
+    const buffer = fs.readFileSync(ssPath);
+    fs.unlinkSync(ssPath);
+    return {
+      action: 'screenshot',
+      screenshot: buffer.toString('base64'),
+      size: buffer.length,
+      mimeType: 'image/png',
+      width: 1920, height: 1080,
+    };
+  }
+
+  // ── Screen Click ──
+  if (action === 'mouse-click') {
+    const x = parseInt(params.x) || 0;
+    const y = parseInt(params.y) || 0;
+    const button = params.button || 'left';
+    const downFlag = button === 'right' ? '0x08' : button === 'middle' ? '0x20' : '0x02';
+    const upFlag = button === 'right' ? '0x10' : button === 'middle' ? '0x40' : '0x04';
+    await runPowerShell(`
+      [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
+      [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x}, ${y});
+      Start-Sleep -Milliseconds 100;
+      Add-Type @"
+        using System.Runtime.InteropServices;
+        public class MO {
+          [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, int e);
+        }
+"@;
+      [MO]::mouse_event(${downFlag}, 0, 0, 0, 0);
+      Start-Sleep -Milliseconds 50;
+      [MO]::mouse_event(${upFlag}, 0, 0, 0, 0)
+    `);
+    return { action: 'mouse-click', x, y, button };
+  }
+
+  // ── Type Text ──
+  if (action === 'type-text') {
+    const text = params.text || '';
+    const escaped = text.replace(/[{}^+%~()\[\]]/g, '{$&}').replace(/'/g, "''");
+    await runPowerShell(`
+      [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
+      [System.Windows.Forms.SendKeys]::SendWait('${escaped}')
+    `);
+    return { action: 'type-text', length: text.length, preview: text.slice(0, 50) };
+  }
+
+  // ── Scroll ──
+  if (action === 'scroll') {
+    const amount = Math.abs(parseInt(params.amount) || 1);
+    const direction = params.direction || 'down';
+    const key = direction === 'up' ? '{UP}' : '{DOWN}';
+    await runPowerShell(`
+      [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
+      1..${amount} | ForEach-Object { [System.Windows.Forms.SendKeys]::SendWait('${key}'); Start-Sleep -Milliseconds 50 }
+    `);
+    return { action: 'scroll', direction, amount };
   }
 
   throw new Error(`Unknown system action: ${action}`);
@@ -571,6 +665,10 @@ Available tools:
    - \`{ "type": "system", "action": "system-info" }\`
    - \`{ "type": "system", "action": "process-list" }\`
    - \`{ "type": "system", "action": "kill-process", "params": { "name": "..." } }\`
+   - \`{ "type": "system", "action": "screenshot" }\` — Takes desktop screenshot, returns base64 image data
+   - \`{ "type": "system", "action": "mouse-click", "params": { "x": 100, "y": 200, "button": "left|right|middle" } }\`
+   - \`{ "type": "system", "action": "type-text", "params": { "text": "Hello world" } }\`
+   - \`{ "type": "system", "action": "scroll", "params": { "amount": 3, "direction": "down|up" } }\`
 
 5. **code** — Execute code (Python/JavaScript/Bash)
    - \`{ "type": "code", "action": "run", "params": { "language": "python|javascript|bash", "code": "..." } }\`

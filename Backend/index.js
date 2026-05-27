@@ -8,6 +8,18 @@ const os = require('os');
 const { spawn } = require('child_process');
 
 const app = express();
+
+// Dependency check
+const requiredDeps = ['express', 'cors', 'groq-sdk', 'dotenv', 'better-sqlite3'];
+for (const dep of requiredDeps) {
+  try {
+    require(dep);
+  } catch (e) {
+    console.error(`[Error] Missing dependency: ${dep}. Run 'npm install' to fix.`);
+    process.exit(1);
+  }
+}
+
 app.use(cors({
     origin: [
         'http://localhost:5173',
@@ -42,7 +54,7 @@ const agentOrchestrator = require('./services/agentOrchestrator');
 let serverModelPrefs = {
   provider: 'groq',
   model: GROQ_MODEL,
-  visionModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
+  visionModel: 'llama-3.2-11b-vision-preview',
   autoRoute: true,
 };
 
@@ -1141,6 +1153,27 @@ app.post('/api/execute', express.raw({ type: '*/*', limit: '64kb' }), async (req
   }
 });
 
+// ── Screen Action Endpoint (before generic /:action to avoid route conflict) ──
+app.post('/api/system/screen-action', async (req, res) => {
+  try {
+    const { action, params } = req.body || {};
+    if (!action) return res.status(400).json({ ok: false, error: 'Action required' });
+
+    logEvent('system', `Screen action: ${action}`, JSON.stringify(params));
+
+    const result = await systemCommander.executeTool({
+      type: 'system',
+      action: action === 'click' ? 'mouse-click' : action === 'type' ? 'type-text' : action === 'scroll' ? 'scroll' : action,
+      params: params || {},
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logEvent('error', 'Screen action failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ── System Commander API ──
 app.post('/api/system/:action', async (req, res) => {
   try {
@@ -1219,6 +1252,100 @@ app.post('/api/task', async (req, res) => {
   }
 });
 
+// ── Screen Analysis Endpoint ──
+// ── Screen Analysis Endpoint (file-system aware) ──
+const DRIVE_QUERY = /\b([a-zA-Z])\s*drive\b|\b([a-zA-Z]):\\?\b/;
+
+app.post('/api/screen/analyze', async (req, res) => {
+  try {
+    const { query } = req.body || {};
+    const rawQuery = (query || '').trim();
+    const userText = rawQuery || 'What is on my screen? Describe it in detail.';
+
+    logEvent('screen', 'Screen analysis requested', userText);
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+
+    const sendEvent = (event, data) => {
+      if (res.writableEnded) return;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Check if query is about files/directories (e.g., "D drive me konse files hai")
+    const driveMatch = rawQuery.match(DRIVE_QUERY);
+    const driveLetter = driveMatch && (driveMatch[1] || driveMatch[2]);
+
+    if (driveLetter) {
+      const targetPath = driveLetter.toUpperCase() + ':\\';
+      sendEvent('log', { text: `📂 Scanning ${targetPath}...` });
+
+      try {
+        const dirResult = await systemCommander.executeTool({
+          type: 'file', action: 'list', params: { path: targetPath },
+        });
+        if (dirResult && dirResult.items) {
+          const folders = dirResult.items.filter(i => i.type === 'dir').map(i => i.name);
+          const files = dirResult.items.filter(i => i.type === 'file').map(i => `${i.name} (${(i.size / 1024).toFixed(0)} KB)`);
+          const text = `**${targetPath}** — ${dirResult.count} items\n\n📁 **Folders:**\n${folders.join('\n') || '(none)'}\n\n📄 **Files:**\n${files.join('\n') || '(none)'}`;
+          sendEvent('log', { text: `✅ Found ${dirResult.count} items (${folders.length} folders, ${files.length} files)` });
+          sendEvent('result', { text, model: 'system/file', screenshot: null });
+          return res.end();
+        }
+      } catch (err) {
+        sendEvent('log', { text: `❌ ${targetPath}: ${err.message}` });
+        sendEvent('result', { text: `Could not access ${targetPath}: ${err.message}`, model: 'system/file', screenshot: null });
+        return res.end();
+      }
+    }
+
+    // Default: take screenshot + vision model
+    sendEvent('log', { text: '📸 Capturing desktop screenshot...' });
+
+    const ssResult = await systemCommander.executeTool({
+      type: 'system', action: 'screenshot', params: {},
+    });
+
+    if (!ssResult || !ssResult.screenshot) {
+      sendEvent('error', { message: 'Failed to capture screenshot' });
+      return res.end();
+    }
+
+    sendEvent('log', { text: `🔍 Analyzing screenshot (${(ssResult.size / 1024).toFixed(0)} KB)...` });
+
+    const dataUrl = `data:${ssResult.mimeType || 'image/png'};base64,${ssResult.screenshot}`;
+    const messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text: userText },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ],
+    }];
+
+    const result = await modelRouter.routeVision(serverModelPrefs, messages, {
+      preferredProvider: serverModelPrefs.provider,
+      preferredModel: serverModelPrefs.visionModel,
+      forVision: true,
+    });
+
+    sendEvent('result', {
+      text: result.text,
+      model: `${result.provider}/${result.model}`,
+      screenshot: ssResult.screenshot,
+    });
+    res.end();
+  } catch (err) {
+    logEvent('error', 'Screen analysis failed', err.message);
+    if (!res.headersSent) return res.status(500).json({ ok: false, error: err.message });
+    res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
+    res.end();
+  }
+});
+
 // ── Production: serve built frontend ──
 const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
 if (require('fs').existsSync(frontendDist)) {
@@ -1264,6 +1391,16 @@ createTtsStreamHandler(wss, logEvent);
 console.log('[TTS Stream] WebSocket server ready on /ws/tts');
 
 const PORT = process.env.PORT || 5060;
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use by another process.`);
+    console.error('  → Run: npx kill-port 5060  (or: netstat -ano | findstr :5060, then taskkill /PID <id> /F)');
+    process.exit(1);
+  } else {
+    console.error('Server error:', err.message);
+    process.exit(1);
+  }
+});
 server.listen(PORT, () => {
     console.log(`JARVIS backend running on http://localhost:${PORT}`);
     console.log(`Model provider: ${serverModelPrefs.provider}, model: ${serverModelPrefs.model}`);

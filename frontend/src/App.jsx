@@ -7,6 +7,7 @@ import Dashboard from './component/Dashboard';
 import DataCore from './component/DataCore';
 import Recipes from './component/Recipes';
 import CodeSandbox from './component/CodeSandbox';
+import ScreenAnalyzer from './component/ScreenAnalyzer';
 import LoginPage from './component/LoginPage';
 import AmbientBackground from './component/AmbientBackground';
 import { MessageSquare, X } from 'lucide-react';
@@ -337,7 +338,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-      <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' ? 'view-dashboard' : ''}`}>
+      <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' || currentView === 'screen' ? 'view-dashboard' : ''}`}>
         {currentView === 'nexus' ? (
           <Suspense fallback={<div className="nexus-loading">Initializing Neural Interface...</div>}>
             <Blob2
@@ -356,6 +357,8 @@ function App() {
               <TaskPanel />
             </div>
           </Suspense>
+        ) : currentView === 'screen' ? (
+          <ScreenAnalyzer />
         ) : currentView === 'datacore' ? (
           <DataCore onSwitchToNexus={() => setCurrentView('nexus')} />
         ) : currentView === 'recipes' ? (
