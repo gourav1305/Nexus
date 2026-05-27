@@ -32,8 +32,17 @@ const {
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
-const VISION_MODEL = process.env.VISION_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct';
 const TTS_VOICE = process.env.TTS_VOICE || 'en-IN-NeerjaNeural';
+
+// ── Model Router ──
+const modelRouter = require('./services/modelRouter');
+
+let serverModelPrefs = {
+  provider: 'groq',
+  model: GROQ_MODEL,
+  visionModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
+  autoRoute: true,
+};
 
 let serverVoiceSettings = resolveVoicePrefs({
     voiceMode: DEFAULT_VOICE_MODE,
@@ -509,14 +518,51 @@ app.post('/api/settings/voice', (req, res) => {
     }
 });
 
+// ── Model Settings ──
+app.get('/api/models', async (req, res) => {
+  try {
+    const info = modelRouter.detectProviders();
+    const ollama = await modelRouter.checkOllama();
+    if (ollama.available && !info.providers.includes('ollama')) {
+      info.providers.push('ollama');
+      info.models.ollama = ollama.models;
+    }
+    res.json({ ok: true, ...info, ollama, active: serverModelPrefs });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/settings/models', (req, res) => {
+  res.json({ ok: true, settings: serverModelPrefs });
+});
+
+app.post('/api/settings/models', (req, res) => {
+  try {
+    const { provider, model, visionModel, autoRoute } = req.body || {};
+    if (provider) serverModelPrefs.provider = provider;
+    if (model) serverModelPrefs.model = model;
+    if (visionModel) serverModelPrefs.visionModel = visionModel;
+    if (autoRoute !== undefined) serverModelPrefs.autoRoute = Boolean(autoRoute);
+    res.json({ ok: true, settings: serverModelPrefs });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.get('/api/health', (req, res) => {
     res.json({
         ok: true,
-        model: GROQ_MODEL,
+        model: serverModelPrefs.model,
+        modelProvider: serverModelPrefs.provider,
+        visionModel: serverModelPrefs.visionModel,
+        autoRoute: serverModelPrefs.autoRoute,
         voice: serverVoiceSettings.voice,
         voiceMode: serverVoiceSettings.voiceMode,
         speakingRate: serverVoiceSettings.speakingRate,
         groqKeyConfigured: Boolean(process.env.GROQ_API_KEY),
+        openaiKeyConfigured: Boolean(process.env.OPENAI_API_KEY),
+        anthropicKeyConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
         systemTools: true,
         platform: process.platform,
         home: userHome,
@@ -717,23 +763,24 @@ app.post('/api/chat/vision', optionalAuth, async (req, res) => {
         const userText = (message || '').trim() || 'What is in this image? Describe it in detail.';
 
         apiUsage.groqCalls++;
-        logEvent('llm', 'Groq vision call', userText);
+        logEvent('llm', 'Vision call', userText);
 
-        const chatCompletion = await groq.chat.completions.create({
-            messages: [
-                {
-                    role: 'user',
-                    content: [
-                        { type: 'text', text: userText },
-                        { type: 'image_url', image_url: { url: dataUrl } },
-                    ],
-                },
+        const messages = [{
+            role: 'user',
+            content: [
+                { type: 'text', text: userText },
+                { type: 'image_url', image_url: { url: dataUrl } },
             ],
-            model: VISION_MODEL,
-            temperature: 0.7,
+        }];
+
+        const result = await modelRouter.routeVision(serverModelPrefs, messages, {
+          preferredProvider: serverModelPrefs.provider,
+          preferredModel: serverModelPrefs.visionModel,
+          category: 'general',
+          forVision: true,
         });
 
-        const textResponse = chatCompletion.choices?.[0]?.message?.content?.trim();
+        const textResponse = result.text;
         if (!textResponse) {
             logEvent('error', 'Vision LLM empty response');
             return res.status(502).json({ error: 'Vision model returned an empty response' });
@@ -745,7 +792,7 @@ app.post('/api/chat/vision', optionalAuth, async (req, res) => {
         res.json({
             text: textResponse,
             ...speech,
-            model: VISION_MODEL,
+            model: `${result.provider}/${result.model}`,
             vision: true,
         });
 
@@ -942,19 +989,18 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
           logEvent('rag', 'Context injected', `${ragContext.length} chars`);
         }
 
-        const chatCompletion = await groq.chat.completions.create({
-            messages: [
-                {
-                    role: 'system',
-                    content: systemContent,
-                },
-                { role: 'user', content: message.trim() },
-            ],
-            model: GROQ_MODEL,
-            temperature: 0.7,
+        const messages = [
+          { role: 'system', content: systemContent },
+          { role: 'user', content: message.trim() },
+        ];
+
+        const result = await modelRouter.routeQuery(serverModelPrefs, messages, {
+          preferredProvider: serverModelPrefs.provider,
+          preferredModel: serverModelPrefs.model,
+          autoRoute: serverModelPrefs.autoRoute,
         });
 
-        const textResponse = chatCompletion.choices?.[0]?.message?.content?.trim();
+        const textResponse = result.text;
         if (!textResponse) {
             logEvent('error', 'LLM empty response', message);
             return res.status(502).json({ error: 'LLM returned an empty response' });
@@ -972,13 +1018,16 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
 
         const speech = await synthesizeSpeech(textResponse, voicePrefs, TTS_VOICE);
         apiUsage.ttsCalls++;
+        apiUsage.groqCalls++;
 
         res.json({
             text: textResponse,
             ...speech,
-            model: GROQ_MODEL,
+            model: `${result.provider}/${result.model}`,
             emotion: emotion ? emotion.emotion : null,
             ragUsed: Boolean(ragContext),
+            category: result.category,
+            fallbacksUsed: result.fallbacksUsed,
         });
 
     } catch (err) {
@@ -1035,7 +1084,8 @@ console.log('[TTS Stream] WebSocket server ready on /ws/tts');
 const PORT = process.env.PORT || 5060;
 server.listen(PORT, () => {
     console.log(`JARVIS backend running on http://localhost:${PORT}`);
-    console.log(`Groq model: ${GROQ_MODEL}`);
+    console.log(`Model provider: ${serverModelPrefs.provider}, model: ${serverModelPrefs.model}`);
+    console.log(`Auto-route: ${serverModelPrefs.autoRoute}`);
     console.log(`TTS voice: ${TTS_VOICE}`);
     console.log(`System tools platform: ${process.platform}`);
     console.log('Info APIs:', getInfoApiStatus());
