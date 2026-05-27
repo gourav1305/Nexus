@@ -15,6 +15,7 @@ import { extractArtifacts } from './utils/artifactUtils';
 
 const Blob2 = lazy(() => import('./component/blob2'));
 const ArtifactPanel = lazy(() => import('./component/ArtifactPanel'));
+const TaskPanel = lazy(() => import('./component/TaskPanel'));
 import {
   loadBlobConfig, loadAssistantSettings, loadUiConfig,
   saveBlobConfig, saveAssistantSettings, saveUiConfig,
@@ -336,7 +337,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-      <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' ? 'view-dashboard' : ''}`}>
+      <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' ? 'view-dashboard' : ''}`}>
         {currentView === 'nexus' ? (
           <Suspense fallback={<div className="nexus-loading">Initializing Neural Interface...</div>}>
             <Blob2
@@ -348,6 +349,12 @@ function App() {
               externalResponse={externalResponse}
               onVoiceMessage={handleSendMessage}
             />
+          </Suspense>
+        ) : currentView === 'agent' ? (
+          <Suspense fallback={<div className="nexus-loading">Loading Agent Interface...</div>}>
+            <div className="agent-view">
+              <TaskPanel />
+            </div>
           </Suspense>
         ) : currentView === 'datacore' ? (
           <DataCore onSwitchToNexus={() => setCurrentView('nexus')} />

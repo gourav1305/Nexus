@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const { executeCode } = require('./codeRunner');
 
 // ── Security Constants ──
 const TIMEOUT = 30000;
@@ -17,6 +18,8 @@ const ALLOWED_FILE_PATHS = [
   path.join(USER_HOME, 'Pictures'),
   path.join(USER_HOME, 'Videos'),
   path.join(USER_HOME, 'Music'),
+  path.join(USER_HOME, 'Desktop', 'Screenshots'),
+  path.join(USER_HOME, 'Pictures', 'Screenshots'),
 ];
 const BLOCKED_DIR_PATTERNS = [
   /[/\\]node_modules[/\\]/i,
@@ -91,10 +94,39 @@ function isPathSafe(targetPath) {
 //  1. FILE OPERATIONS
 // ═══════════════════════════════════════════
 
+// ── Binary file detection ──
+const BINARY_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.svg',
+  '.mp3', '.wav', '.ogg', '.m4a', '.flac', '.wma',
+  '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.webm',
+  '.zip', '.rar', '.7z', '.tar', '.gz',
+  '.exe', '.dll', '.msi', '.dmg', '.pkg',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.ttf', '.otf', '.woff', '.woff2', '.eot',
+]);
+
+function isBinaryFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 async function readFile(filePath) {
   const check = isPathSafe(filePath);
   if (!check.safe) throw new Error(check.reason);
   if (!fs.existsSync(check.resolved)) throw new Error('File not found');
+
+  if (isBinaryFile(check.resolved)) {
+    const ext = path.extname(check.resolved).toLowerCase();
+    const stat = fs.statSync(check.resolved);
+    return {
+      path: check.resolved,
+      binary: true,
+      extension: ext,
+      size: stat.size,
+      message: `Cannot read "${path.basename(check.resolved)}" (binary file). Use the vision endpoint for images or screenshot analysis.`,
+    };
+  }
+
   const content = fs.readFileSync(check.resolved, 'utf-8');
   if (content.length > MAX_OUTPUT) throw new Error('File too large');
   return { path: check.resolved, content, size: content.length };
@@ -426,11 +458,28 @@ async function systemControl(action, params = {}) {
   throw new Error(`Unknown system action: ${action}`);
 }
 
+async function runCode(language, code) {
+  return new Promise((resolve, reject) => {
+    const output = [];
+    const timer = setTimeout(() => reject(new Error('Code execution timed out')), TIMEOUT);
+    executeCode({
+      language: language || 'auto',
+      code,
+      onOutput: (text) => output.push({ type: 'stdout', text }),
+      onError: (text) => output.push({ type: 'stderr', text }),
+      onDone: (result) => {
+        clearTimeout(timer);
+        resolve({ output, exitCode: result.exitCode, duration: result.duration });
+      },
+    });
+  });
+}
+
 // ═══════════════════════════════════════════
 //  TOOL PARSER — Parse tool calls from LLM text
 // ═══════════════════════════════════════════
 
-const TOOL_PATTERN = /```tool\s*\n([\s\S]*?)```/g;
+const TOOL_PATTERN = /```(?:tool|json|)\s*\n?([\s\S]*?)```/g;
 
 function parseToolCalls(text) {
   const tools = [];
@@ -458,7 +507,7 @@ async function executeTool(toolCall) {
     case 'file':
       switch (action) {
         case 'read': return await readFile(params.path);
-        case 'write': return await writeFile(params.path, params.content);
+        case 'write': case 'create': case 'make': return await writeFile(params.path, params.content);
         case 'list': return await listDir(params.path);
         case 'create-project': return await createProject(params.name, params.structure);
         default: throw new Error(`Unknown file action: ${action}`);
@@ -469,6 +518,9 @@ async function executeTool(toolCall) {
 
     case 'browser':
       return await browserAction(action, params);
+
+    case 'code':
+      return await runCode(params.language, params.code);
 
     case 'system':
       return await systemControl(action, params);
@@ -520,6 +572,9 @@ Available tools:
    - \`{ "type": "system", "action": "process-list" }\`
    - \`{ "type": "system", "action": "kill-process", "params": { "name": "..." } }\`
 
+5. **code** — Execute code (Python/JavaScript/Bash)
+   - \`{ "type": "code", "action": "run", "params": { "language": "python|javascript|bash", "code": "..." } }\`
+
 Allowed file paths: Desktop, Downloads, Documents, Pictures, Videos, Music, and the project directory.
 The system will execute the tool and return the result alongside your text response.
 
@@ -535,6 +590,7 @@ module.exports = {
   gitRun,
   browserAction,
   systemControl,
+  runCode,
   parseToolCalls,
   executeTool,
   buildToolSystemPrompt,

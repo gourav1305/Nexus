@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import './Navbar.css';
 import {
-  Hexagon, Search, Bell, Settings, Move, LayoutDashboard, Cpu, Database,
-  Palette, Volume2, Sliders, Info, RotateCw, Eye, EyeOff,
-  Zap, RefreshCw, Trash2, Music, Mic, TestTube, Activity, LogOut, Terminal,
+  Hexagon, Settings, Move, LayoutDashboard, Cpu, Database,
+  Palette, Volume2, Sliders, Info, Eye, Search,
+  Zap, Trash2, Music, TestTube, Activity, LogOut, Terminal, Bot,
 } from 'lucide-react';
 import {
   VOICE_MODES,
@@ -347,6 +347,16 @@ const Navbar = ({
             <span className="nav-text">Sandbox</span>
           </a>
         </li>
+        <li>
+          <a href="#"
+            className={`nav-item ${currentView === 'agent' ? 'active' : ''}`}
+            onClick={(e) => { e.preventDefault(); if (uiConfig.audioFeedbackEnabled) playClickBlip(); setView('agent'); }}
+            onMouseEnter={handleNavHover}
+          >
+            <Bot size={16} className="nav-icon" />
+            <span className="nav-text">Agent</span>
+          </a>
+        </li>
         <li style={{ position: 'relative' }}>
           <a href="#" className={`nav-item ${showSettings ? 'active' : ''}`} onClick={handleSettingsClick} onMouseEnter={handleNavHover}>
             <Settings size={16} className="nav-icon" />
@@ -391,12 +401,6 @@ const Navbar = ({
       </ul>
 
       <div className="action-section">
-        <button className="icon-btn" aria-label="Search" onMouseEnter={handleNavHover}>
-          <Search size={18} strokeWidth={1.5} />
-        </button>
-        <button className="icon-btn" aria-label="Notifications" onMouseEnter={handleNavHover}>
-          <Bell size={18} strokeWidth={1.5} />
-        </button>
         {user && (
           <div className="user-profile-nav" onMouseEnter={handleNavHover}>
             <span className="user-profile-name">{user.displayName || user.username}</span>

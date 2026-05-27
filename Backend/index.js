@@ -37,6 +37,7 @@ const TTS_VOICE = process.env.TTS_VOICE || 'en-IN-NeerjaNeural';
 // ── Model Router ──
 const modelRouter = require('./services/modelRouter');
 const systemCommander = require('./services/systemCommander');
+const agentOrchestrator = require('./services/agentOrchestrator');
 
 let serverModelPrefs = {
   provider: 'groq',
@@ -927,6 +928,33 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
         }
 
 
+        // ── Agent Task Detection ──
+        if (agentOrchestrator.detectTaskRequest(message)) {
+          try {
+            logEvent('agent', 'Task detected', message);
+            const taskResult = await agentOrchestrator.processTask(
+              message.trim(),
+              serverModelPrefs,
+              (type, msg) => {
+                if (type === 'log') console.log('[Agent]', msg);
+              },
+            );
+            const taskSummary = taskResult.summary;
+            const speech = await synthesizeSpeech(taskSummary, voicePrefs, TTS_VOICE);
+            apiUsage.ttsCalls++;
+            apiUsage.llmCalls++;
+            return res.json({
+              text: taskSummary,
+              ...speech,
+              model: 'nexus-agent',
+              taskResult,
+            });
+          } catch (taskErr) {
+            logEvent('error', 'Agent task failed', taskErr.message);
+            // Fall through to normal LLM
+          }
+        }
+
         if (!process.env.GROQ_API_KEY) {
             return res.status(500).json({ error: 'GROQ_API_KEY is missing in Backend/.env' });
         }
@@ -1147,6 +1175,47 @@ app.post('/api/system/:action', async (req, res) => {
   } catch (err) {
     logEvent('error', `System API error: ${req.params.action}`, err.message);
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Agent Task API (SSE streaming) ──
+app.post('/api/task', async (req, res) => {
+  try {
+    const { message } = req.body || {};
+    if (!message || !message.trim()) return res.status(400).json({ ok: false, error: 'Message required' });
+
+    logEvent('agent', 'Task API', message);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+
+    const sendEvent = (event, data) => {
+      if (res.writableEnded) return;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const result = await agentOrchestrator.processTask(
+      message.trim(),
+      serverModelPrefs,
+      (type, msg) => {
+        if (type === 'log') {
+          const isStep = msg.match(/Step (\d+)\/(\d+)/);
+          if (isStep) sendEvent('step', { current: parseInt(isStep[1]), total: parseInt(isStep[2]), text: msg });
+          else sendEvent('log', { text: msg });
+        }
+      },
+    );
+
+    sendEvent('done', result);
+    res.end();
+  } catch (err) {
+    logEvent('error', 'Task API error', err.message);
+    if (!res.headersSent) return res.status(500).json({ ok: false, error: err.message });
+    res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
+    res.end();
   }
 });
 
