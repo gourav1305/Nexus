@@ -9,6 +9,14 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:5060',
         changeOrigin: true,
+        // Don't buffer SSE responses
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            if (proxyRes.headers['content-type'] === 'text/event-stream') {
+              delete proxyRes.headers['content-length'];
+            }
+          });
+        },
       },
     },
   },

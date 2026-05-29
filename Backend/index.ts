@@ -2,7 +2,10 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import dotenv from 'dotenv';
-dotenv.config({ path: path.join(__dirname, '.env') });
+const envPath = fs.existsSync(path.join(__dirname, '.env'))
+  ? path.join(__dirname, '.env')
+  : path.join(__dirname, '..', '.env');
+dotenv.config({ path: envPath });
 import express from 'express';
 import cors from 'cors';
 import Groq from 'groq-sdk';
@@ -1136,91 +1139,212 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
           { role: 'user', content: message.trim() },
         ];
 
-        const result = await modelRouter.routeQuery(serverModelPrefs, messages, {
-          preferredProvider: serverModelPrefs.provider,
-          preferredModel: serverModelPrefs.model,
-          autoRoute: serverModelPrefs.autoRoute,
-        });
+        const isStreaming = req.body.stream === true;
 
-        const textResponse = result.text;
-        if (!textResponse) {
-            logEvent('error', 'LLM empty response', message);
-            return res.status(502).json({ error: 'LLM returned an empty response' });
-        }
+        if (isStreaming) {
+          // ── SSE Streaming Mode ──
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+            'X-Accel-Buffering': 'no',
+          });
+          res.flushHeaders();
+          // Send initial keepalive to establish the SSE connection
+          res.write(':ok\n\n');
 
-        // ── Execute any tool calls from LLM response (only if tool instructions were given) ──
-        let displayText = textResponse;
-        let toolResults = [];
-        const toolCalls = needsTools ? systemCommander.parseToolCalls(textResponse) : [];
-        for (const tc of toolCalls) {
+          const sendEvent = (event, data) => {
+            if (res.writableEnded) return;
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+          };
+
           try {
-            const toolResult = await systemCommander.executeTool(tc);
-            toolResults.push({ type: tc.type, action: tc.action, result: toolResult });
-            logEvent('tool', `${tc.type}/${tc.action}`, JSON.stringify(tc.params || {}).slice(0, 200));
-            apiUsage.systemCommands++;
-          } catch (toolErr) {
-            toolResults.push({ type: tc.type, action: tc.action, error: toolErr.message });
-            logEvent('error', `Tool failed: ${tc.type}/${tc.action}`, toolErr.message);
-          }
-        }
-        if (toolCalls.length > 0) {
-          // Feed tool results back to the LLM so it can formulate a proper response with actual data
-          const toolSummary = toolResults.map(t =>
-            t.error
-              ? `${t.type}/${t.action}: Error - ${t.error}`
-              : `${t.type}/${t.action}: ${JSON.stringify(t.result).slice(0, 800)}`
-          ).join('\n\n');
-          const followUpMessages = [
-            { role: 'system', content: systemContent },
-            { role: 'user', content: message.trim() },
-            { role: 'assistant', content: textResponse },
-            { role: 'user', content: `You used the tools above. Here are the results:\n${toolSummary}\n\nBased on this data, respond to the user's original query naturally. Keep it concise and voice-friendly.` },
-          ];
-          try {
-            const followUpResult = await modelRouter.routeQuery(serverModelPrefs, followUpMessages, {
+            let fullText = '';
+            const streamResult = await modelRouter.streamRouteQuery(serverModelPrefs, messages, {
               preferredProvider: serverModelPrefs.provider,
               preferredModel: serverModelPrefs.model,
               autoRoute: serverModelPrefs.autoRoute,
+            }, (token: string) => {
+              fullText += token;
+              sendEvent('token', token);
             });
+
+            if (!fullText) {
+              sendEvent('error', { message: 'LLM returned an empty response' });
+              sendEvent('done', {});
+              if (!res.writableEnded) res.end();
+              return;
+            }
+
+            // Tool execution from streamed response
+            let displayText = fullText;
+            let toolResults: any[] = [];
+            const toolCalls = needsTools ? systemCommander.parseToolCalls(fullText) : [];
+            for (const tc of toolCalls) {
+              try {
+                const toolResult = await systemCommander.executeTool(tc);
+                toolResults.push({ type: tc.type, action: tc.action, result: toolResult });
+                logEvent('tool', `${tc.type}/${tc.action}`, JSON.stringify(tc.params || {}).slice(0, 200));
+                apiUsage.systemCommands++;
+              } catch (toolErr: any) {
+                toolResults.push({ type: tc.type, action: tc.action, error: toolErr.message });
+                logEvent('error', `Tool failed: ${tc.type}/${tc.action}`, toolErr.message);
+              }
+            }
+
+            if (toolCalls.length > 0) {
+              sendEvent('tool_result', { tools: toolResults });
+              const toolSummary = toolResults.map((t: any) =>
+                t.error
+                  ? `${t.type}/${t.action}: Error - ${t.error}`
+                  : `${t.type}/${t.action}: ${JSON.stringify(t.result).slice(0, 800)}`
+              ).join('\n\n');
+              const followUpMessages = [
+                { role: 'system', content: systemContent },
+                { role: 'user', content: message.trim() },
+                { role: 'assistant', content: fullText },
+                { role: 'user', content: `You used the tools above. Here are the results:\n${toolSummary}\n\nBased on this data, respond to the user's original query naturally. Keep it concise and voice-friendly.` },
+              ];
+              try {
+                let followUpText = '';
+                await modelRouter.streamRouteQuery(serverModelPrefs, followUpMessages, {
+                  preferredProvider: serverModelPrefs.provider,
+                  preferredModel: serverModelPrefs.model,
+                  autoRoute: serverModelPrefs.autoRoute,
+                }, (token: string) => {
+                  followUpText += token;
+                  sendEvent('token', token);
+                });
+                apiUsage.llmCalls++;
+                displayText = followUpText || fullText.replace(/```tool[\s\S]*?```/g, '').trim();
+              } catch (followUpErr: any) {
+                logEvent('error', 'Tool follow-up LLM failed', followUpErr.message);
+                displayText = fullText.replace(/```tool[\s\S]*?```/g, '').trim();
+              }
+              if (!displayText) {
+                const toolSummary = toolResults.map((t: any) =>
+                  t.error ? `${t.type}/${t.action}: Error - ${t.error}` : `${t.type}/${t.action}: Ok`
+                ).join(', ');
+                displayText = `Done: ${toolSummary}`;
+              }
+            }
+
+            if (userId) {
+              try {
+                await memoryStore.add(groq, userId, 'user', 'user', message.trim());
+                await memoryStore.add(groq, userId, 'nexus', 'assistant', displayText);
+              } catch (memErr: any) {
+                logEvent('error', 'Memory store failed', memErr.message);
+              }
+            }
+
+            const speech = await synthesizeSpeech(displayText, voicePrefs, TTS_VOICE);
+            apiUsage.ttsCalls++;
             apiUsage.llmCalls++;
-            displayText = followUpResult.text || textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
-          } catch (followUpErr) {
-            logEvent('error', 'Tool follow-up LLM failed', followUpErr.message);
-            displayText = textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
+
+            sendEvent('done', {
+              text: displayText,
+              ...speech,
+              model: `${streamResult.provider}/${streamResult.model}`,
+              emotion: emotion ? emotion.emotion : null,
+              ragUsed: Boolean(ragContext),
+              category: streamResult.category,
+              fallbacksUsed: streamResult.fallbacksUsed,
+              toolCalls: toolCalls.length > 0 ? toolCalls.map((t: any) => ({ type: t.type, action: t.action })) : undefined,
+              toolResults: toolResults.length > 0 ? toolResults : undefined,
+            });
+          } catch (err: any) {
+            console.error('Streaming Error:', err);
+            sendEvent('error', { message: err.message || 'Backend request failed' });
+          } finally {
+            if (!res.writableEnded) res.end();
           }
-          if (!displayText) {
-            const toolSummary = toolResults.map(t =>
-              t.error ? `${t.type}/${t.action}: Error - ${t.error}` : `${t.type}/${t.action}: Ok`
-            ).join(', ');
-            displayText = `Done: ${toolSummary}`;
+        } else {
+          // ── Non-Streaming Mode (original) ──
+          const result = await modelRouter.routeQuery(serverModelPrefs, messages, {
+            preferredProvider: serverModelPrefs.provider,
+            preferredModel: serverModelPrefs.model,
+            autoRoute: serverModelPrefs.autoRoute,
+          });
+
+          const textResponse = result.text;
+          if (!textResponse) {
+              logEvent('error', 'LLM empty response', message);
+              return res.status(502).json({ error: 'LLM returned an empty response' });
           }
+
+          let displayText = textResponse;
+          let toolResults: any[] = [];
+          const toolCalls = needsTools ? systemCommander.parseToolCalls(textResponse) : [];
+          for (const tc of toolCalls) {
+            try {
+              const toolResult = await systemCommander.executeTool(tc);
+              toolResults.push({ type: tc.type, action: tc.action, result: toolResult });
+              logEvent('tool', `${tc.type}/${tc.action}`, JSON.stringify(tc.params || {}).slice(0, 200));
+              apiUsage.systemCommands++;
+            } catch (toolErr: any) {
+              toolResults.push({ type: tc.type, action: tc.action, error: toolErr.message });
+              logEvent('error', `Tool failed: ${tc.type}/${tc.action}`, toolErr.message);
+            }
+          }
+          if (toolCalls.length > 0) {
+            const toolSummary = toolResults.map((t: any) =>
+              t.error
+                ? `${t.type}/${t.action}: Error - ${t.error}`
+                : `${t.type}/${t.action}: ${JSON.stringify(t.result).slice(0, 800)}`
+            ).join('\n\n');
+            const followUpMessages = [
+              { role: 'system', content: systemContent },
+              { role: 'user', content: message.trim() },
+              { role: 'assistant', content: textResponse },
+              { role: 'user', content: `You used the tools above. Here are the results:\n${toolSummary}\n\nBased on this data, respond to the user's original query naturally. Keep it concise and voice-friendly.` },
+            ];
+            try {
+              const followUpResult = await modelRouter.routeQuery(serverModelPrefs, followUpMessages, {
+                preferredProvider: serverModelPrefs.provider,
+                preferredModel: serverModelPrefs.model,
+                autoRoute: serverModelPrefs.autoRoute,
+              });
+              apiUsage.llmCalls++;
+              displayText = followUpResult.text || textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
+            } catch (followUpErr: any) {
+              logEvent('error', 'Tool follow-up LLM failed', followUpErr.message);
+              displayText = textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
+            }
+            if (!displayText) {
+              const toolSummary = toolResults.map((t: any) =>
+                t.error ? `${t.type}/${t.action}: Error - ${t.error}` : `${t.type}/${t.action}: Ok`
+              ).join(', ');
+              displayText = `Done: ${toolSummary}`;
+            }
+          }
+
+          if (userId) {
+            try {
+              await memoryStore.add(groq, userId, 'user', 'user', message.trim());
+              await memoryStore.add(groq, userId, 'nexus', 'assistant', textResponse);
+            } catch (memErr: any) {
+              logEvent('error', 'Memory store failed', memErr.message);
+            }
+          }
+
+          const speech = await synthesizeSpeech(displayText, voicePrefs, TTS_VOICE);
+          apiUsage.ttsCalls++;
+          apiUsage.llmCalls++;
+
+          res.json({
+              text: displayText,
+              ...speech,
+              model: `${result.provider}/${result.model}`,
+              emotion: emotion ? emotion.emotion : null,
+              ragUsed: Boolean(ragContext),
+              category: result.category,
+              fallbacksUsed: result.fallbacksUsed,
+              toolCalls: toolCalls.length > 0 ? toolCalls.map((t: any) => ({ type: t.type, action: t.action })) : undefined,
+              toolResults: toolResults.length > 0 ? toolResults : undefined,
+          });
         }
-
-        // Store in memory
-        if (userId) {
-          try {
-            await memoryStore.add(groq, userId, 'user', 'user', message.trim());
-            await memoryStore.add(groq, userId, 'nexus', 'assistant', textResponse);
-          } catch (memErr) {
-            logEvent('error', 'Memory store failed', memErr.message);
-          }
-        }
-
-        const speech = await synthesizeSpeech(displayText, voicePrefs, TTS_VOICE);
-        apiUsage.ttsCalls++;
-        apiUsage.llmCalls++;
-
-        res.json({
-            text: displayText,
-            ...speech,
-            model: `${result.provider}/${result.model}`,
-            emotion: emotion ? emotion.emotion : null,
-            ragUsed: Boolean(ragContext),
-            category: result.category,
-            fallbacksUsed: result.fallbacksUsed,
-            toolCalls: toolCalls.length > 0 ? toolCalls.map(t => ({ type: t.type, action: t.action })) : undefined,
-            toolResults: toolResults.length > 0 ? toolResults : undefined,
-        });
 
     } catch (err) {
         console.error('API Error:', err);

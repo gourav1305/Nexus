@@ -213,6 +213,59 @@ function App() {
     return () => clearInterval(poll);
   }, []);
 
+  // ── SSE streaming parser ──
+  const streamChat = async (text, onToken, onDone, onError) => {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ message: text, stream: true, ...resolveVoicePrefs(assistantSettings) }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `Server error ${res.status}`);
+    }
+    if (!res.body) {
+      // Fallback if streaming not supported (older browser/proxy)
+      const data = await res.json();
+      if (data.text) onDone(data);
+      return data;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let eventType = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // Process line-by-line (SSE format: \n delimited)
+      let idx;
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        if (line.startsWith(':') || !line.trim()) continue; // comment or blank
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6);
+          if (eventType === 'token') {
+            const token = JSON.parse(dataStr);
+            if (typeof token === 'string') onToken(token);
+          } else if (eventType === 'done') {
+            const data = JSON.parse(dataStr);
+            if (data && data.text) onDone(data);
+            return data;
+          } else if (eventType === 'error') {
+            const data = JSON.parse(dataStr);
+            onError(data?.message || 'Stream error');
+            return null;
+          }
+        }
+      }
+    }
+    return null;
+  };
+
   // ── Chat send ──
   const handleSendMessage = async (text) => {
     if (!text.trim()) return;
@@ -222,32 +275,75 @@ function App() {
     setExternalResponse(null);
 
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify({ message: text, ...resolveVoicePrefs(assistantSettings) }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Server error');
-      addHistoryItem('assistant', data.text);
+      // Insert empty assistant message immediately
+      const msgId = Date.now();
+      setHistory(prev => [...prev, { role: 'assistant', text: '', timestamp: msgId }]);
+
+      let accumulated = '';
+      let finalData = null;
+
+      const result = await streamChat(
+        text,
+        (token) => {
+          accumulated += token;
+          // Update the last assistant message in-place with accumulated text
+          setHistory(prev => {
+            const updated = [...prev];
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === 'assistant' && updated[i].timestamp === msgId) {
+                updated[i] = { ...updated[i], text: accumulated };
+                break;
+              }
+            }
+            return updated;
+          });
+        },
+        (data) => {
+          finalData = data;
+        },
+        (errorMsg) => {
+          throw new Error(errorMsg);
+        }
+      );
+
+      if (result && result.text) finalData = result;
+      if (!finalData && !accumulated) throw new Error('Empty response');
+
+      // Finalize with the streaming data or accumulated text
+      const responseText = finalData?.text || accumulated;
+      if (!responseText) throw new Error('Empty response');
+
       playSuccessSound();
 
-      // ── Extract artifacts from code blocks ──
-      const newArtifacts = extractArtifacts(data.text, artifacts.length);
+      const newArtifacts = extractArtifacts(responseText, artifacts.length);
       if (newArtifacts.length > 0) {
         setArtifacts(prev => [...prev, ...newArtifacts]);
         setArtifactsOpen(true);
       }
 
+      // Update the message with final text (in case token updates left partial)
+      setHistory(prev => {
+        const updated = [...prev];
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].role === 'assistant' && updated[i].timestamp === msgId) {
+            updated[i] = { ...updated[i], text: responseText };
+            break;
+          }
+        }
+        return updated;
+      });
+
       setExternalResponse({
-        text: data.text, userMessage: text,
-        audioBase64: data.audioBase64, audioMimeType: data.audioMimeType,
+        text: responseText, userMessage: text,
+        audioBase64: finalData?.audioBase64, audioMimeType: finalData?.audioMimeType,
         voicePrefs: resolveVoicePrefs(assistantSettings),
       });
     } catch (err) {
       console.error('Chat Error:', err);
       playErrorSound();
       setExternalResponse({ error: err.message || 'Connection failed', userMessage: text });
+      // Remove the empty assistant message on error
+      setHistory(prev => prev.filter(h => h.text !== '' || h.role !== 'assistant'));
     } finally { setIsThinking(false); }
   };
 

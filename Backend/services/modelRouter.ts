@@ -164,6 +164,128 @@ async function callOllama(messages: any, model: string, options: any = {}) {
 
 const PROVIDER_CALLS = { groq: callGroq, openai: callOpenAI, anthropic: callAnthropic, ollama: callOllama };
 
+// ── Streaming Provider Functions ──
+
+async function streamGroq(messages: any, model: string, options: any, onToken: (t: string) => void) {
+  const groq = PROVIDERS.groq;
+  if (!groq) throw new Error('Groq provider not initialized');
+  const stream = await groq.chat.completions.create({
+    messages,
+    model,
+    temperature: options.temperature ?? 0.7,
+    max_tokens: options.maxTokens ?? 4096,
+    stream: true,
+  });
+  let full = '';
+  for await (const chunk of stream) {
+    const token = chunk.choices?.[0]?.delta?.content || '';
+    if (token) { full += token; onToken(token); }
+  }
+  return full.trim();
+}
+
+async function streamOpenAI(messages: any, model: string, options: any, onToken: (t: string) => void) {
+  const openai = PROVIDERS.openai;
+  if (!openai) throw new Error('OpenAI provider not initialized');
+  const stream = await openai.chat.completions.create({
+    messages,
+    model,
+    temperature: options.temperature ?? 0.7,
+    max_tokens: options.maxTokens ?? 4096,
+    stream: true,
+  });
+  let full = '';
+  for await (const chunk of stream) {
+    const token = chunk.choices?.[0]?.delta?.content || '';
+    if (token) { full += token; onToken(token); }
+  }
+  return full.trim();
+}
+
+async function streamAnthropic(messages: any, model: string, options: any, onToken: (t: string) => void) {
+  const anthropic = PROVIDERS.anthropic;
+  if (!anthropic) throw new Error('Anthropic provider not initialized');
+  let system = '';
+  const msgs = messages.filter((m: any) => {
+    if (m.role === 'system') { system = m.content; return false; }
+    return true;
+  });
+  const mapped = msgs.map((m: any) => ({
+    role: m.role === 'assistant' ? 'assistant' : 'user',
+    content: typeof m.content === 'string' ? m.content : m.content.map((c: any) => {
+      if (c.type === 'image_url') {
+        const match = c.image_url?.url?.match(/^data:(image\/\w+);base64,(.+)$/);
+        if (match) return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
+        return { type: 'text', text: c.image_url?.url || '' };
+      }
+      return c;
+    }),
+  }));
+  const stream = await anthropic.messages.create({
+    model,
+    messages: mapped,
+    system: system || undefined,
+    max_tokens: options.maxTokens ?? 4096,
+    temperature: options.temperature ?? 0.7,
+    stream: true,
+  });
+  let full = '';
+  for await (const chunk of stream) {
+    if (chunk.type === 'content_block_delta' && (chunk as any).delta?.text) {
+      const token = (chunk as any).delta.text;
+      full += token;
+      onToken(token);
+    }
+  }
+  return full.trim();
+}
+
+async function streamOllama(messages: any, model: string, options: any, onToken: (t: string) => void) {
+  const host = process.env.OLLAMA_HOST || 'http://localhost:11434';
+  const mapped = messages.map((m: any) => ({
+    role: m.role,
+    content: typeof m.content === 'string' ? m.content : m.content.map((c: any) => {
+      if (c.type === 'image_url') return { type: 'image_url', image_url: c.image_url.url };
+      return c;
+    }),
+  }));
+  const res = await axios.post(`${host}/api/chat`, {
+    model: model || 'llama3',
+    messages: mapped,
+    stream: true,
+    options: { temperature: options.temperature ?? 0.7, num_predict: options.maxTokens ?? 4096 },
+  }, { responseType: 'stream', timeout: 60000 });
+  let full = '';
+  return new Promise<string>((resolve, reject) => {
+    let buffer = '';
+    res.data.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.message?.content) {
+            full += parsed.message.content;
+            onToken(parsed.message.content);
+          }
+          if (parsed.done) resolve(full.trim());
+        } catch {}
+      }
+    });
+    res.data.on('end', () => resolve(full.trim()));
+    res.data.on('error', reject);
+  });
+}
+
+const STREAM_PROVIDER_CALLS: Record<string, any> = {
+  groq: streamGroq,
+  openai: streamOpenAI,
+  anthropic: streamAnthropic,
+  ollama: streamOllama,
+};
+
 // ── Main Route Function ──
 
 // Fallback models when primary is rate-limited
@@ -250,6 +372,79 @@ async function routeQuery(userPrefs: any, messages: any, options: any = {}) {
   throw new Error(`All providers failed. Errors: ${errors.map(e => `${e.provider}: ${e.error}`).join(' | ')}`);
 }
 
+async function streamRouteQuery(userPrefs: any, messages: any, options: any = {}, onToken: (t: string) => void) {
+  const { preferredProvider, preferredModel, category: forcedCategory, forVision, autoRoute } = options;
+  const category = forcedCategory || classifyQuery(messages.map((m: any) => m.content).join(' '));
+  const errors: any[] = [];
+
+  const available = detectProviders().providers;
+  const providerList: string[] = [];
+
+  if (preferredProvider && available.includes(preferredProvider)) {
+    providerList.push(preferredProvider);
+  }
+  for (const p of PROVIDER_ORDER) {
+    if (available.includes(p) && !providerList.includes(p)) {
+      providerList.push(p);
+    }
+  }
+  if (forVision) {
+    if (providerList.length === 0) {
+      throw new Error('No AI providers available. Configure GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in .env');
+    }
+  } else if (!providerList.includes('ollama')) {
+    try {
+      await axios.get(`${process.env.OLLAMA_HOST || 'http://localhost:11434'}/api/tags`, { timeout: 2000 });
+      providerList.push('ollama');
+      if (!PROVIDERS.ollama) PROVIDERS.ollama = true;
+    } catch {}
+  }
+
+  if (providerList.length === 0) {
+    throw new Error('No AI providers available. Configure GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in .env');
+  }
+
+  for (const provider of providerList) {
+    try {
+      const isPreferred = provider === preferredProvider;
+      let model: string | null;
+      if (isPreferred && preferredModel && !autoRoute) {
+        model = preferredModel;
+      } else {
+        model = selectModel(provider, category, forVision);
+      }
+      if (!model) continue;
+      const caller = STREAM_PROVIDER_CALLS[provider];
+      if (!caller) continue;
+
+      try {
+        const text = await caller(messages, model, { temperature: options.temperature ?? 0.7, maxTokens: options.maxTokens }, onToken);
+        return { text, provider, model, category, fallbacksUsed: errors.length };
+      } catch (err: any) {
+        if (err.message && (err.message.includes('429') || err.message.includes('rate_limit'))) {
+          console.warn(`[ModelRouter] ${provider}/${model} rate-limited. Trying fallback models...`);
+          const fallbacks = FALLBACK_MODELS[provider] || [];
+          for (const fbModel of fallbacks) {
+            if (fbModel === model) continue;
+            try {
+              const text = await caller(messages, fbModel, { temperature: options.temperature ?? 0.7, maxTokens: options.maxTokens }, onToken);
+              return { text, provider, model: fbModel, category, fallbacksUsed: errors.length + 1 };
+            } catch (fbErr: any) {
+              console.warn(`[ModelRouter] Fallback ${provider}/${fbModel} also failed: ${fbErr.message}`);
+            }
+          }
+        }
+        throw err;
+      }
+    } catch (err: any) {
+      errors.push({ provider, error: err.message });
+      console.warn(`[ModelRouter] ${provider} failed: ${err.message}. Trying next...`);
+    }
+  }
+
+  throw new Error(`All providers failed. Errors: ${errors.map(e => `${e.provider}: ${e.error}`).join(' | ')}`);
+}
+
 async function routeVision(userPrefs: any, messages: any, options: any = {}) {
   return routeQuery(userPrefs, messages, { ...options, forVision: true });
 }
@@ -265,4 +460,4 @@ async function checkOllama() {
   }
 }
 
-export { detectProviders, classifyQuery, routeQuery, routeVision, checkOllama, MODEL_MAP, PROVIDER_ORDER };
+export { detectProviders, classifyQuery, routeQuery, streamRouteQuery, routeVision, checkOllama, MODEL_MAP, PROVIDER_ORDER };
