@@ -580,6 +580,7 @@ const { detectEmotion, buildSystemPrompt } = require('./services/emotionDetector
 const { searchWeb, fetchPageContent } = require('./services/webSearch');
 const memoryStore = require('./services/memoryStore');
 const { executeCode } = require('./services/codeRunner');
+const emailService = require('./services/emailService');
 
 app.get('/api/voices', (req, res) => {
     res.json({
@@ -1285,6 +1286,53 @@ app.post('/api/system/screen-action', async (req, res) => {
   }
 });
 
+// ── Email API ──
+app.get('/api/email/config', (req, res) => {
+  try {
+    const config = emailService.getConfig();
+    res.json({ ok: true, config: { smtp: { ...config.smtp, pass: config.smtp.pass ? '****' : '' }, imap: { ...config.imap, pass: config.imap.pass ? '****' : '' }, defaultFrom: config.defaultFrom } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/email/config', (req, res) => {
+  try {
+    emailService.updateConfig(req.body);
+    logEvent('email', 'Email config updated');
+    res.json({ ok: true, message: 'Email config updated' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/email/send', async (req, res) => {
+  try {
+    const { to, subject, text, html, attachments } = req.body || {};
+    if (!to || !subject || (!text && !html)) {
+      return res.status(400).json({ ok: false, error: 'Missing required fields: to, subject, and text or html' });
+    }
+    logEvent('email', `Sending email to ${to}: ${subject}`);
+    const result = await emailService.sendEmail({ to, subject, text, html, attachments });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logEvent('error', 'Email send failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/email/read', async (req, res) => {
+  try {
+    const { folder, limit } = req.body || {};
+    logEvent('email', `Reading emails from ${folder || 'INBOX'}`);
+    const emails = await emailService.readEmails({ folder, limit });
+    res.json({ ok: true, emails, count: emails.length });
+  } catch (err) {
+    logEvent('error', 'Email read failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ── System Commander API ──
 app.post('/api/system/:action', async (req, res) => {
   try {
@@ -1312,6 +1360,11 @@ app.post('/api/system/:action', async (req, res) => {
       case 'system-open': result = await systemCommander.systemControl('open-app', params); break;
       case 'system-processes': result = await systemCommander.systemControl('process-list'); break;
       case 'system-kill': result = await systemCommander.systemControl('kill-process', params); break;
+      case 'file-search': result = await systemCommander.executeTool({ type: 'system', action: 'search-files', params }); break;
+      case 'clipboard-read': result = await systemCommander.executeTool({ type: 'system', action: 'clipboard-read' }); break;
+      case 'clipboard-write': result = await systemCommander.executeTool({ type: 'system', action: 'clipboard-write', params }); break;
+      case 'clipboard-history': result = await systemCommander.executeTool({ type: 'system', action: 'clipboard-history' }); break;
+      case 'read-document': result = await systemCommander.executeTool({ type: 'system', action: 'read-document', params }); break;
       default: return res.status(400).json({ ok: false, error: `Unknown action: ${action}` });
     }
 

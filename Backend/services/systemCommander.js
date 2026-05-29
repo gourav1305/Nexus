@@ -603,6 +603,127 @@ async function analyzeImage(imagePath, query) {
   return { action: 'analyze-image', path: imagePath, result: result.text, model: `${result.provider}/${result.model}`, size: buffer.length };
 }
 
+// ═══════════════════════════════════════════
+//  5. FILE SEARCH (system-wide)
+// ═══════════════════════════════════════════
+
+async function searchFiles({ query, path: searchPath, maxResults = 30 }) {
+  const searchRoot = searchPath || USER_HOME;
+  const check = isPathSafe(searchRoot);
+  if (!check.safe) throw new Error(check.reason);
+
+  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const psScript = `
+    $results = Get-ChildItem -Path ${psQuote(check.resolved)} -Recurse -ErrorAction SilentlyContinue -Include *${psQuote(escapedQuery)}* | 
+      Where-Object { !$_.PSIsContainer } | 
+      Select-Object -First ${maxResults} FullName, Length, LastWriteTime |
+      ForEach-Object { $_.FullName + '|' + $_.Length + '|' + $_.LastWriteTime }
+    if ($results) { $results -join [char]10 } else { "NO_RESULTS" }
+  `;
+  const ps = await runPowerShell(psScript);
+  const output = ps.stdout.trim();
+  if (!output || output === 'NO_RESULTS') {
+    return { query, path: check.resolved, results: [], count: 0 };
+  }
+  const lines = output.split('\n').filter(l => l.trim());
+  const results = lines.map(line => {
+    const parts = line.split('|');
+    return { path: parts[0] || line, size: parseInt(parts[1]) || 0, modified: parts[2] || '' };
+  });
+  return { query, path: check.resolved, results, count: results.length };
+}
+
+// ═══════════════════════════════════════════
+//  6. CLIPBOARD
+// ═══════════════════════════════════════════
+
+const clipboardHistory = [];
+
+async function clipboardRead() {
+  const ps = await runPowerShell('Get-Clipboard -Format Text -Raw');
+  const text = (ps.stdout || '').trim();
+  const item = { text, timestamp: Date.now() };
+  if (text) {
+    const last = clipboardHistory[clipboardHistory.length - 1];
+    if (!last || last.text !== text) {
+      clipboardHistory.push(item);
+      if (clipboardHistory.length > 50) clipboardHistory.splice(0, clipboardHistory.length - 50);
+    }
+  }
+  return { text, length: text.length, history: clipboardHistory.slice(-10).reverse() };
+}
+
+async function clipboardWrite({ text }) {
+  const escaped = text.replace(/'/g, "''");
+  await runPowerShell(`Set-Clipboard -Value '${escaped}'`);
+  const item = { text, timestamp: Date.now() };
+  const last = clipboardHistory[clipboardHistory.length - 1];
+  if (!last || last.text !== text) {
+    clipboardHistory.push(item);
+    if (clipboardHistory.length > 50) clipboardHistory.splice(0, clipboardHistory.length - 50);
+  }
+  return { text, length: text.length, history: clipboardHistory.slice(-10).reverse() };
+}
+
+async function clipboardGetHistory() {
+  return { history: clipboardHistory.slice(-20).reverse() };
+}
+
+// ═══════════════════════════════════════════
+//  7. DOCUMENT READER (PDF/DOCX)
+// ═══════════════════════════════════════════
+
+async function extractDocumentText(filePath) {
+  const check = isPathSafe(filePath);
+  if (!check.safe) throw new Error(check.reason);
+  if (!fs.existsSync(check.resolved)) throw new Error('File not found');
+
+  const ext = path.extname(check.resolved).toLowerCase();
+
+  if (ext === '.pdf') {
+    try {
+      const pdfParse = require('pdf-parse');
+      const buffer = fs.readFileSync(check.resolved);
+      const data = await pdfParse(buffer);
+      return { path: check.resolved, text: data.text, pages: data.numpages, type: 'pdf' };
+    } catch (err) {
+      throw new Error(`PDF reading failed: ${err.message}`);
+    }
+  }
+
+  if (ext === '.docx') {
+    try {
+      const mammoth = require('mammoth');
+      const buffer = fs.readFileSync(check.resolved);
+      const result = await mammoth.extractRawText({ buffer });
+      return { path: check.resolved, text: result.value, type: 'docx' };
+    } catch (err) {
+      throw new Error(`DOCX reading failed: ${err.message}`);
+    }
+  }
+
+  if (ext === '.doc') {
+    // .doc files — try using PowerShell to extract text
+    try {
+      const ps = await runPowerShell(`
+        Add-Type -AssemblyName "Microsoft.Office.Interop.Word" -ErrorAction Stop;
+        $word = New-Object -ComObject Word.Application;
+        $word.Visible = $false;
+        $doc = $word.Documents.Open('${check.resolved.replace(/\\/g, '\\\\')}');
+        $text = $doc.Content.Text;
+        $doc.Close();
+        $word.Quit();
+        Write-Output $text
+      `);
+      return { path: check.resolved, text: ps.stdout.trim(), type: 'doc' };
+    } catch {
+      throw new Error('DOC files require Microsoft Word installed. Try converting to .docx or .pdf.');
+    }
+  }
+
+  throw new Error(`Unsupported document format: ${ext}. Supported: .pdf, .docx, .doc`);
+}
+
 async function runCode(language, code) {
   return new Promise((resolve, reject) => {
     const output = [];
@@ -668,6 +789,11 @@ async function executeTool(toolCall) {
       return await runCode(params.language, params.code);
 
     case 'system':
+      if (action === 'search-files') return await searchFiles(params);
+      if (action === 'clipboard-read') return await clipboardRead();
+      if (action === 'clipboard-write') return await clipboardWrite(params);
+      if (action === 'clipboard-history') return await clipboardGetHistory();
+      if (action === 'read-document') return await extractDocumentText(params.path);
       return await systemControl(action, params);
 
     case 'vision':
@@ -735,6 +861,17 @@ Available tools:
 6. **vision** — Analyze image files using AI vision
    - \`{ "type": "vision", "action": "analyze", "params": { "path": "full/path/to/image.png", "query": "What is in this image?" } }\`
 
+7. **system/search** — Search files on the computer
+   - \`{ "type": "system", "action": "search-files", "params": { "query": "filename or keyword", "path": "C:\\Users\\...", "maxResults": 30 } }\`
+
+8. **system/clipboard** — Read/write clipboard
+   - \`{ "type": "system", "action": "clipboard-read" }\` — Read current clipboard content
+   - \`{ "type": "system", "action": "clipboard-write", "params": { "text": "text to copy" } }\` — Write text to clipboard
+   - \`{ "type": "system", "action": "clipboard-history" }\` — View clipboard history
+
+9. **system/document** — Read PDF/DOCX document text
+   - \`{ "type": "system", "action": "read-document", "params": { "path": "full/path/to/document.pdf" } }\`
+
 Allowed file paths: Desktop, Downloads, Documents, Pictures, Videos, Music, and the project directory.
 
 IMPORTANT: If the user is just having a conversation, asking a question, or greeting you, DO NOT use any tools. Just respond conversationally.
@@ -750,6 +887,11 @@ module.exports = {
   gitRun,
   browserAction,
   systemControl,
+  searchFiles,
+  clipboardRead,
+  clipboardWrite,
+  clipboardGetHistory,
+  extractDocumentText,
   runCode,
   analyzeImage,
   parseToolCalls,

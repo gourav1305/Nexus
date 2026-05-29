@@ -12,6 +12,10 @@ import LoginPage from './component/LoginPage';
 import Todos from './component/Todos';
 import Calendar from './component/Calendar';
 import AmbientBackground from './component/AmbientBackground';
+import EmailClient from './component/EmailClient';
+import FileSearch from './component/FileSearch';
+import ClipboardManager from './component/ClipboardManager';
+import DocReader from './component/DocReader';
 import { MessageSquare, X } from 'lucide-react';
 import { playStartupHum, playErrorSound, playSuccessSound, playHoverBlip, playClickBlip } from './utils/audioFeedback';
 import { extractArtifacts } from './utils/artifactUtils';
@@ -340,7 +344,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-  <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' || currentView === 'screen' || currentView === 'todos' || currentView === 'calendar' ? 'view-dashboard' : ''}`}>
+  <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' || currentView === 'screen' || currentView === 'todos' || currentView === 'calendar' || currentView === 'email' || currentView === 'filesearch' || currentView === 'clipboard' || currentView === 'docreader' ? 'view-dashboard' : ''}`}>
         {currentView === 'nexus' ? (
           <Suspense fallback={<div className="nexus-loading">Initializing Neural Interface...</div>}>
             <Blob2
@@ -371,6 +375,14 @@ function App() {
           <Todos user={user} token={token} />
         ) : currentView === 'calendar' ? (
           <Calendar user={user} token={token} />
+        ) : currentView === 'email' ? (
+          <EmailClient onSwitchToNexus={() => setCurrentView('nexus')} />
+        ) : currentView === 'filesearch' ? (
+          <FileSearch onSwitchToNexus={() => setCurrentView('nexus')} />
+        ) : currentView === 'clipboard' ? (
+          <ClipboardManager onSwitchToNexus={() => setCurrentView('nexus')} />
+        ) : currentView === 'docreader' ? (
+          <DocReader onSwitchToNexus={() => setCurrentView('nexus')} />
         ) : (
           <Dashboard
             assistantEnabled={assistantEnabled}

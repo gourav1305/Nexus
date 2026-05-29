@@ -3,7 +3,8 @@ import './Navbar.css';
 import {
   Hexagon, Settings, Move, LayoutDashboard, Cpu, Database,
   Palette, Volume2, Sliders, Info, Eye, Search,
-  Zap, Trash2, Music, TestTube, Activity, LogOut, Terminal, Bot, Monitor, ListTodo, Calendar,
+  Zap, Trash2,   Music, TestTube, Activity, LogOut, Terminal, Bot, Monitor, ListTodo, Calendar,
+  Mail, Clipboard, FileText,
 } from 'lucide-react';
 import {
   VOICE_MODES,
@@ -338,6 +339,25 @@ const Navbar = ({
             </a>
             <a href="#" className={`nav-item ${currentView === 'recipes' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('recipes'); }}>
               <Activity size={14} /> <span>Recipes</span>
+            </a>
+          </div>
+        </li>
+
+        {/* Utilities Group */}
+        <li className="nav-group">
+          <div className="group-trigger">Utilities</div>
+          <div className="group-dropdown">
+            <a href="#" className={`nav-item ${currentView === 'email' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('email'); }}>
+              <Mail size={14} /> <span>Email</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'filesearch' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('filesearch'); }}>
+              <Search size={14} /> <span>File Search</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'clipboard' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('clipboard'); }}>
+              <Clipboard size={14} /> <span>Clipboard</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'docreader' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('docreader'); }}>
+              <FileText size={14} /> <span>Doc Reader</span>
             </a>
           </div>
         </li>
