@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": ".",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "allowJs": false,
+    "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
+    "types": ["node"]
+  },
+  "include": [
+    "types.d.ts",
+    "index.ts",
+    "auth.ts",
+    "db.ts",
+    "ttsEngine.ts",
+    "voiceCatalog.ts",
+    "recipeEngine.ts",
+    "services/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

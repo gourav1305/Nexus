@@ -4,10 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node dist/index.js",
+    "dev": "tsx index.ts",
+    "build": "tsc",
+    "watch": "tsc --watch",
     "clean-start": "npx -y kill-port 5060 && npm start",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "_comment": "Development: npm run dev (uses tsx). Production: npm run build && npm start",
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -31,5 +35,19 @@
     "openai": "^6.39.0",
     "pdf-parse": "^2.4.5",
     "puppeteer": "^25.1.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/imap": "^0.8.43",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.9.1",
+    "@types/nodemailer": "^8.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   }
 }
