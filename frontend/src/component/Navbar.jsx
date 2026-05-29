@@ -4,7 +4,7 @@ import {
   Hexagon, Settings, Move, LayoutDashboard, Cpu, Database,
   Palette, Volume2, Sliders, Info, Eye, Search,
   Zap, Trash2,   Music, TestTube, Activity, LogOut, Terminal, Bot, Monitor, ListTodo, Calendar,
-  Mail, Clipboard, FileText,
+  Mail, Clipboard, FileText, Image, Languages, Mic,
 } from 'lucide-react';
 import {
   VOICE_MODES,
@@ -339,6 +339,22 @@ const Navbar = ({
             </a>
             <a href="#" className={`nav-item ${currentView === 'recipes' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('recipes'); }}>
               <Activity size={14} /> <span>Recipes</span>
+            </a>
+          </div>
+        </li>
+
+        {/* AI Tools Group */}
+        <li className="nav-group">
+          <div className="group-trigger">AI Tools</div>
+          <div className="group-dropdown">
+            <a href="#" className={`nav-item ${currentView === 'imagegen' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('imagegen'); }}>
+              <Image size={14} /> <span>Image Gen</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'translate' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('translate'); }}>
+              <Languages size={14} /> <span>Translate</span>
+            </a>
+            <a href="#" className={`nav-item ${currentView === 'voicelab' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setView('voicelab'); }}>
+              <Mic size={14} /> <span>Voice Lab</span>
             </a>
           </div>
         </li>

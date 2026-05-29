@@ -16,6 +16,9 @@ import EmailClient from './component/EmailClient';
 import FileSearch from './component/FileSearch';
 import ClipboardManager from './component/ClipboardManager';
 import DocReader from './component/DocReader';
+import ImageGenerator from './component/ImageGenerator';
+import TranslationPanel from './component/TranslationPanel';
+import VoiceLab from './component/VoiceLab';
 import { MessageSquare, X } from 'lucide-react';
 import { playStartupHum, playErrorSound, playSuccessSound, playHoverBlip, playClickBlip } from './utils/audioFeedback';
 import { extractArtifacts } from './utils/artifactUtils';
@@ -344,7 +347,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-  <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' || currentView === 'screen' || currentView === 'todos' || currentView === 'calendar' || currentView === 'email' || currentView === 'filesearch' || currentView === 'clipboard' || currentView === 'docreader' ? 'view-dashboard' : ''}`}>
+  <main className={`view-container ${currentView === 'dashboard' || currentView === 'datacore' || currentView === 'recipes' || currentView === 'codesandbox' || currentView === 'agent' || currentView === 'screen' || currentView === 'todos' || currentView === 'calendar' || currentView === 'email' || currentView === 'filesearch' || currentView === 'clipboard' || currentView === 'docreader' || currentView === 'imagegen' || currentView === 'translate' || currentView === 'voicelab' ? 'view-dashboard' : ''}`}>
         {currentView === 'nexus' ? (
           <Suspense fallback={<div className="nexus-loading">Initializing Neural Interface...</div>}>
             <Blob2
@@ -383,6 +386,12 @@ function App() {
           <ClipboardManager onSwitchToNexus={() => setCurrentView('nexus')} />
         ) : currentView === 'docreader' ? (
           <DocReader onSwitchToNexus={() => setCurrentView('nexus')} />
+        ) : currentView === 'imagegen' ? (
+          <ImageGenerator onSwitchToNexus={() => setCurrentView('nexus')} />
+        ) : currentView === 'translate' ? (
+          <TranslationPanel onSwitchToNexus={() => setCurrentView('nexus')} />
+        ) : currentView === 'voicelab' ? (
+          <VoiceLab onSwitchToNexus={() => setCurrentView('nexus')} />
         ) : (
           <Dashboard
             assistantEnabled={assistantEnabled}

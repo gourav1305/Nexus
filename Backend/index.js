@@ -581,6 +581,9 @@ const { searchWeb, fetchPageContent } = require('./services/webSearch');
 const memoryStore = require('./services/memoryStore');
 const { executeCode } = require('./services/codeRunner');
 const emailService = require('./services/emailService');
+const imageGen = require('./services/imageGen');
+const translationService = require('./services/translationService');
+const voiceLab = require('./services/voiceLab');
 
 app.get('/api/voices', (req, res) => {
     res.json({
@@ -1282,6 +1285,62 @@ app.post('/api/system/screen-action', async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err) {
     logEvent('error', 'Screen action failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Image Generation API ──
+app.post('/api/image/generate', async (req, res) => {
+  try {
+    const { prompt, width, height, model } = req.body || {};
+    if (!prompt || !prompt.trim()) return res.status(400).json({ ok: false, error: 'Prompt is required' });
+    logEvent('image', 'Generating image', prompt);
+    const result = await imageGen.generateImage({ prompt, width, height, model });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logEvent('error', 'Image generation failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Translation API ──
+app.get('/api/translate/languages', (req, res) => {
+  res.json({ ok: true, languages: translationService.SUPPORTED_LANGUAGES });
+});
+
+app.post('/api/translate', async (req, res) => {
+  try {
+    const { text, sourceLang, targetLang } = req.body || {};
+    if (!text || !text.trim()) return res.status(400).json({ ok: false, error: 'Text is required' });
+    if (!targetLang) return res.status(400).json({ ok: false, error: 'Target language is required' });
+    logEvent('translate', `Translating to ${targetLang}`, text.slice(0, 100));
+    const result = await translationService.translate({ text, sourceLang, targetLang });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logEvent('error', 'Translation failed', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Voice Lab API ──
+app.get('/api/tts/voices', async (req, res) => {
+  try {
+    const voices = await voiceLab.listVoices();
+    res.json({ ok: true, voices, count: voices.length });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/tts/preview', async (req, res) => {
+  try {
+    const { voice, text } = req.body || {};
+    if (!voice) return res.status(400).json({ ok: false, error: 'Voice name is required' });
+    logEvent('tts', 'Voice preview', `${voice}: ${(text || '').slice(0, 50)}`);
+    const result = await voiceLab.previewVoice(voice, text || 'Hello, this is a voice preview.');
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logEvent('error', 'Voice preview failed', err.message);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
