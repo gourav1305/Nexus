@@ -54,16 +54,10 @@ Respond with either:
 Then briefly explain what was verified.`;
 
 function detectTaskRequest(text) {
-  // Only trigger on actual task requests, not general questions
-  if (/^\s*(aap|you)\s*(kya|what)\b/i.test(text)) return false;
-  if (/\b(kaise|how)\s*(to|do|kare|karte|karta)\b/i.test(text)) return false;
-
-  const taskPatterns = [
-    /\b(banao|create|build|develop|make|generate|construct|project banayein|app banao|website banao|tool banao)\b/i,
-    /\b(weather app|todo app|calculator|portfolio|landing page|dashboard|game|bot)\b/i,
-    /(desktop|folder|project)\s*(pe|me|par|main)\s*(banao|create|build)/i,
-  ];
-  return taskPatterns.some(p => p.test(text));
+  // Only trigger when user explicitly asks for autonomous execution
+  if (/\b(?:agent|autonomous|autonomously|task|apne aap|khud se|automatically)\s+(?:se|karo|kare|do|execute|run|handle|banao|create|make|build)\b/i.test(text)) return true;
+  if (/^(?:agent|task|autonomous|apne aap|khud)\b/i.test(text.trim())) return true;
+  return false;
 }
 
 async function callLLM(systemPrompt, userMessage, modelPrefs) {

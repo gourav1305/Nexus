@@ -68,7 +68,7 @@ function classifyQuery(text) {
 
 // ── Model Selection ──
 const MODEL_MAP = {
-  groq: { code: 'llama-3.3-70b-versatile', creative: 'llama-3.1-8b-instant', math: 'gemma2-9b-it', general: 'llama-3.1-8b-instant', vision: 'llama-3.2-11b-vision-preview' },
+  groq: { code: 'llama-3.3-70b-versatile', creative: 'llama-3.1-8b-instant', math: 'gemma2-9b-it', general: 'llama-3.1-8b-instant', vision: 'meta-llama/llama-4-scout-17b-16e-instruct' },
   openai: { code: 'gpt-4o', creative: 'gpt-4o-mini', math: 'gpt-4o', general: 'gpt-4o-mini', vision: 'gpt-4o' },
   anthropic: { code: 'claude-3-5-sonnet-20241022', creative: 'claude-3-haiku-20240307', math: 'claude-3-sonnet-20240229', general: 'claude-3-haiku-20240307', vision: 'claude-3-5-sonnet-20241022' },
 };
@@ -166,6 +166,13 @@ const PROVIDER_CALLS = { groq: callGroq, openai: callOpenAI, anthropic: callAnth
 
 // ── Main Route Function ──
 
+// Fallback models when primary is rate-limited
+const FALLBACK_MODELS = {
+  groq: ['llama-3.1-8b-instant', 'gemma2-9b-it', 'mixtral-8x7b-32768'],
+  openai: ['gpt-4o-mini'],
+  anthropic: ['claude-3-haiku-20240307'],
+};
+
 async function routeQuery(userPrefs, messages, options = {}) {
   const { preferredProvider, preferredModel, category: forcedCategory, forVision, autoRoute } = options;
   const category = forcedCategory || classifyQuery(messages.map(m => m.content).join(' '));
@@ -183,8 +190,12 @@ async function routeQuery(userPrefs, messages, options = {}) {
       providerList.push(p);
     }
   }
-  // Try Ollama always if available
-  if (!providerList.includes('ollama')) {
+  // Try Ollama always if available (skip for vision - Ollama vision models are unreliable)
+  if (forVision) {
+    if (providerList.length === 0) {
+      throw new Error('No AI providers available. Configure GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in .env');
+    }
+  } else if (!providerList.includes('ollama')) {
     try {
       const axios = require('axios');
       await axios.get(`${process.env.OLLAMA_HOST || 'http://localhost:11434'}/api/tags`, { timeout: 2000 });
@@ -210,8 +221,27 @@ async function routeQuery(userPrefs, messages, options = {}) {
       const caller = PROVIDER_CALLS[provider];
       if (!caller) continue;
 
-      const result = await caller(messages, model, { temperature: options.temperature ?? 0.7, maxTokens: options.maxTokens });
-      return { text: result, provider, model, category, fallbacksUsed: errors.length };
+      try {
+        const result = await caller(messages, model, { temperature: options.temperature ?? 0.7, maxTokens: options.maxTokens });
+        return { text: result, provider, model, category, fallbacksUsed: errors.length };
+      } catch (err) {
+        // If rate-limited (429), try fallback models within same provider
+        if (err.message && (err.message.includes('429') || err.message.includes('rate_limit'))) {
+          console.warn(`[ModelRouter] ${provider}/${model} rate-limited. Trying fallback models...`);
+          const fallbacks = FALLBACK_MODELS[provider] || [];
+          for (const fbModel of fallbacks) {
+            if (fbModel === model) continue; // Skip the same model
+            try {
+              const result = await caller(messages, fbModel, { temperature: options.temperature ?? 0.7, maxTokens: options.maxTokens });
+              console.log(`[ModelRouter] Fallback ${provider}/${fbModel} succeeded`);
+              return { text: result, provider, model: fbModel, category, fallbacksUsed: errors.length + 1 };
+            } catch (fbErr) {
+              console.warn(`[ModelRouter] Fallback ${provider}/${fbModel} also failed: ${fbErr.message}`);
+            }
+          }
+        }
+        throw err; // Re-throw if no fallback worked
+      }
     } catch (err) {
       errors.push({ provider, error: err.message });
       console.warn(`[ModelRouter] ${provider} failed: ${err.message}. Trying next...`);

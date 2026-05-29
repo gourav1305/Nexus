@@ -51,10 +51,17 @@ const modelRouter = require('./services/modelRouter');
 const systemCommander = require('./services/systemCommander');
 const agentOrchestrator = require('./services/agentOrchestrator');
 
+// Initialize systemCommander with modelRouter for vision analysis
+systemCommander.init(modelRouter, {
+  provider: 'groq',
+  model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+  autoRoute: true,
+});
+
 let serverModelPrefs = {
   provider: 'groq',
   model: GROQ_MODEL,
-  visionModel: 'llama-3.2-11b-vision-preview',
+  visionModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
   autoRoute: true,
 };
 
@@ -71,6 +78,10 @@ const BOTH_TRIGGERS = /\b(new|update|current|recent|aaj\s*ka|today)\b/i;
 
 const detectMemoryQuery = (text) => MEMORY_TRIGGERS.test(text);
 const detectSearchQuery = (text) => SEARCH_TRIGGERS.test(text) || BOTH_TRIGGERS.test(text);
+
+// ── Tool Need Detection (only show tool instructions when user asks for tool ops) ──
+const TOOL_TRIGGERS = /\b(file|read|write|list|folder|directory|create|project|git|commit|push|pull|status|branch|browser|search|navigate|code|run|execute|script|python|javascript|bash|terminal|command|volume|brightness|open.*app|screenshot|mouse|click|scroll|type|process|kill|shutdown|system.*info)\b/i;
+const detectToolNeed = (text) => TOOL_TRIGGERS.test(text);
 
 // ── Web Search Endpoint ──
 const searchCache = {};
@@ -1054,8 +1065,12 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
         );
         if (emotion) logEvent('emotion', `Detected: ${emotion.emotion} (score: ${emotion.score})`);
 
-        // Add system tool capabilities
-        systemContent += '\n\n' + systemCommander.buildToolSystemPrompt();
+        // Only add system tool capabilities when user asks for tool operations
+        const needsTools = detectToolNeed(message.trim());
+        if (needsTools) {
+          systemContent += '\n\n' + systemCommander.buildToolSystemPrompt();
+          logEvent('tool', 'Tool instructions added to prompt', message);
+        }
 
         // ── RAG: Web Search + Memory Retrieval ──
         let ragContext = '';
@@ -1124,10 +1139,10 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
             return res.status(502).json({ error: 'LLM returned an empty response' });
         }
 
-        // ── Execute any tool calls from LLM response ──
+        // ── Execute any tool calls from LLM response (only if tool instructions were given) ──
         let displayText = textResponse;
         let toolResults = [];
-        const toolCalls = systemCommander.parseToolCalls(textResponse);
+        const toolCalls = needsTools ? systemCommander.parseToolCalls(textResponse) : [];
         for (const tc of toolCalls) {
           try {
             const toolResult = await systemCommander.executeTool(tc);
@@ -1140,7 +1155,30 @@ app.post('/api/chat', optionalAuth, async (req, res) => {
           }
         }
         if (toolCalls.length > 0) {
-          displayText = textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
+          // Feed tool results back to the LLM so it can formulate a proper response with actual data
+          const toolSummary = toolResults.map(t =>
+            t.error
+              ? `${t.type}/${t.action}: Error - ${t.error}`
+              : `${t.type}/${t.action}: ${JSON.stringify(t.result).slice(0, 800)}`
+          ).join('\n\n');
+          const followUpMessages = [
+            { role: 'system', content: systemContent },
+            { role: 'user', content: message.trim() },
+            { role: 'assistant', content: textResponse },
+            { role: 'user', content: `You used the tools above. Here are the results:\n${toolSummary}\n\nBased on this data, respond to the user's original query naturally. Keep it concise and voice-friendly.` },
+          ];
+          try {
+            const followUpResult = await modelRouter.routeQuery(serverModelPrefs, followUpMessages, {
+              preferredProvider: serverModelPrefs.provider,
+              preferredModel: serverModelPrefs.model,
+              autoRoute: serverModelPrefs.autoRoute,
+            });
+            apiUsage.llmCalls++;
+            displayText = followUpResult.text || textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
+          } catch (followUpErr) {
+            logEvent('error', 'Tool follow-up LLM failed', followUpErr.message);
+            displayText = textResponse.replace(/```tool[\s\S]*?```/g, '').trim();
+          }
           if (!displayText) {
             const toolSummary = toolResults.map(t =>
               t.error ? `${t.type}/${t.action}: Error - ${t.error}` : `${t.type}/${t.action}: Ok`
@@ -1463,15 +1501,22 @@ const wss = new WebSocketServer({ server, path: '/ws/tts' });
 createTtsStreamHandler(wss, logEvent);
 console.log('[TTS Stream] WebSocket server ready on /ws/tts');
 
+// ── Global crash protection ──
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH] Uncaught exception:', err.message);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH] Unhandled rejection:', reason?.message || reason);
+});
+
 const PORT = process.env.PORT || 5060;
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`Port ${PORT} is already in use by another process.`);
-    console.error('  → Run: npx kill-port 5060  (or: netstat -ano | findstr :5060, then taskkill /PID <id> /F)');
-    process.exit(1);
+    console.error(`Port ${PORT} is busy. Trying port ${PORT + 1}...`);
+    server.listen(PORT + 1);
   } else {
     console.error('Server error:', err.message);
-    process.exit(1);
   }
 });
 server.listen(PORT, () => {

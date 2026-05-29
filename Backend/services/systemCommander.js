@@ -3,6 +3,13 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const { executeCode } = require('./codeRunner');
+let modelRouter = null;
+let visionConfig = { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', autoRoute: false };
+
+function init(mr, config) {
+  modelRouter = mr;
+  if (config) visionConfig = config;
+}
 
 // ── Security Constants ──
 const TIMEOUT = 30000;
@@ -127,20 +134,38 @@ function isBinaryFile(filePath) {
   return BINARY_EXTENSIONS.has(ext);
 }
 
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
+
 async function readFile(filePath) {
   const check = isPathSafe(filePath);
   if (!check.safe) throw new Error(check.reason);
   if (!fs.existsSync(check.resolved)) throw new Error('File not found');
 
+  const ext = path.extname(check.resolved).toLowerCase();
+
+  // For image files: read as base64 so the agent/LLM can use it
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    const stat = fs.statSync(check.resolved);
+    if (stat.size > MAX_OUTPUT) throw new Error('Image too large (max 512KB)');
+    const buffer = fs.readFileSync(check.resolved);
+    return {
+      path: check.resolved,
+      content: buffer.toString('base64'),
+      mimeType: `image/${ext.slice(1)}`,
+      size: stat.size,
+      type: 'image',
+    };
+  }
+
+  // Other binary files: reject with clear instruction
   if (isBinaryFile(check.resolved)) {
-    const ext = path.extname(check.resolved).toLowerCase();
     const stat = fs.statSync(check.resolved);
     return {
       path: check.resolved,
+      message: `File "${path.basename(check.resolved)}" is a binary file (${ext}).\n- For images: use the screenshot system action\n- For PDFs/docs: use a dedicated reader`,
       binary: true,
       extension: ext,
       size: stat.size,
-      message: `Cannot read "${path.basename(check.resolved)}" (binary file). Use the vision endpoint for images or screenshot analysis.`,
     };
   }
 
@@ -552,6 +577,32 @@ async function systemControl(action, params = {}) {
   throw new Error(`Unknown system action: ${action}`);
 }
 
+// ── Analyze Image (read from disk + vision model) ──
+async function analyzeImage(imagePath, query) {
+  if (!modelRouter) throw new Error('Vision model not available (modelRouter not initialized)');
+  if (!fs.existsSync(imagePath)) throw new Error('Image file not found: ' + imagePath);
+  const ext = path.extname(imagePath).toLowerCase();
+  if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(ext)) throw new Error('Not a supported image format: ' + ext);
+  const buffer = fs.readFileSync(imagePath);
+  const b64 = buffer.toString('base64');
+  const mimeType = `image/${ext === '.jpg' ? 'jpeg' : ext.slice(1)}`;
+  const dataUrl = `data:${mimeType};base64,${b64}`;
+  const userPrefs = { provider: visionConfig.provider, model: visionConfig.model, autoRoute: visionConfig.autoRoute };
+  const messages = [{
+    role: 'user',
+    content: [
+      { type: 'text', text: query || 'Describe this image in detail.' },
+      { type: 'image_url', image_url: { url: dataUrl } },
+    ],
+  }];
+  const result = await modelRouter.routeVision(userPrefs, messages, {
+    preferredProvider: visionConfig.provider,
+    preferredModel: visionConfig.model,
+    forVision: true,
+  });
+  return { action: 'analyze-image', path: imagePath, result: result.text, model: `${result.provider}/${result.model}`, size: buffer.length };
+}
+
 async function runCode(language, code) {
   return new Promise((resolve, reject) => {
     const output = [];
@@ -573,7 +624,7 @@ async function runCode(language, code) {
 //  TOOL PARSER — Parse tool calls from LLM text
 // ═══════════════════════════════════════════
 
-const TOOL_PATTERN = /```(?:tool|json|)\s*\n?([\s\S]*?)```/g;
+const TOOL_PATTERN = /```tool\s*\n?([\s\S]*?)```/g;
 
 function parseToolCalls(text) {
   const tools = [];
@@ -619,6 +670,10 @@ async function executeTool(toolCall) {
     case 'system':
       return await systemControl(action, params);
 
+    case 'vision':
+      if (action === 'analyze') return await analyzeImage(params.path, params.query);
+      throw new Error(`Unknown vision action: ${action}`);
+
     default:
       throw new Error(`Unknown tool type: ${type}`);
   }
@@ -627,20 +682,24 @@ async function executeTool(toolCall) {
 // ── System prompt builder for LLM ──
 function buildToolSystemPrompt() {
   return `
-You have access to system tools. To use a tool, output a code block with language "tool" containing JSON:
+You have access to system tools. ONLY use a tool when the user EXPLICITLY asks for a file, git, browser, code execution, or system control operation.
+
+NEVER invent tool calls on your own. NEVER use a tool just because it's available. Only use a tool if the user's request DIRECTLY matches one of the actions below.
+
+To use a tool, output a code block with language "tool" containing JSON:
 \`\`\`tool
 { "type": "...", "action": "...", "params": { ... } }
 \`\`\`
 
 Available tools:
 
-1. **file** — File operations
+1. **file** — File operations (only if user mentions reading/writing/listing files)
    - \`{ "type": "file", "action": "read", "params": { "path": "..." } }\`
    - \`{ "type": "file", "action": "write", "params": { "path": "...", "content": "..." } }\`
    - \`{ "type": "file", "action": "list", "params": { "path": "..." } }\`
    - \`{ "type": "file", "action": "create-project", "params": { "name": "...", "structure": { "filename": "content", "subdir": { ... } } } }\`
 
-2. **git** — Git operations (in current repo)
+2. **git** — Git operations (only if user explicitly asks about git)
    - \`{ "type": "git", "action": "status" }\`
    - \`{ "type": "git", "action": "log" }\`
    - \`{ "type": "git", "action": "diff" }\`
@@ -649,7 +708,7 @@ Available tools:
    - \`{ "type": "git", "action": "push" }\`
    - \`{ "type": "git", "action": "pull" }\`
 
-3. **browser** — Browser automation (Puppeteer)
+3. **browser** — Browser automation (only if user explicitly asks to open a website or search)
    - \`{ "type": "browser", "action": "open", "params": { "url": "..." } }\`
    - \`{ "type": "browser", "action": "search", "params": { "query": "...", "engine": "google|youtube" } }\`
    - \`{ "type": "browser", "action": "screenshot", "params": { "url": "..." } }\`
@@ -657,7 +716,7 @@ Available tools:
    - \`{ "type": "browser", "action": "type", "params": { "selector": "...", "text": "..." } }\`
    - \`{ "type": "browser", "action": "extract" }\`
 
-4. **system** — System control
+4. **system** — System control (only if user explicitly asks about system)
    - \`{ "type": "system", "action": "volume", "params": { "level": 0-100 } }\`
    - \`{ "type": "system", "action": "volume-up" }\` / \`{ "type": "system", "action": "volume-down" }\` / \`{ "type": "system", "action": "mute" }\`
    - \`{ "type": "system", "action": "brightness", "params": { "level": 0-100 } }\`
@@ -670,17 +729,20 @@ Available tools:
    - \`{ "type": "system", "action": "type-text", "params": { "text": "Hello world" } }\`
    - \`{ "type": "system", "action": "scroll", "params": { "amount": 3, "direction": "down|up" } }\`
 
-5. **code** — Execute code (Python/JavaScript/Bash)
+5. **code** — Execute code (only if user asks to run code)
    - \`{ "type": "code", "action": "run", "params": { "language": "python|javascript|bash", "code": "..." } }\`
 
-Allowed file paths: Desktop, Downloads, Documents, Pictures, Videos, Music, and the project directory.
-The system will execute the tool and return the result alongside your text response.
+6. **vision** — Analyze image files using AI vision
+   - \`{ "type": "vision", "action": "analyze", "params": { "path": "full/path/to/image.png", "query": "What is in this image?" } }\`
 
-When you use a tool, explain what you're doing in natural language first, then output the tool block.
+Allowed file paths: Desktop, Downloads, Documents, Pictures, Videos, Music, and the project directory.
+
+IMPORTANT: If the user is just having a conversation, asking a question, or greeting you, DO NOT use any tools. Just respond conversationally.
 `.trim();
 }
 
 module.exports = {
+  init,
   readFile,
   writeFile,
   listDir,
@@ -689,6 +751,7 @@ module.exports = {
   browserAction,
   systemControl,
   runCode,
+  analyzeImage,
   parseToolCalls,
   executeTool,
   buildToolSystemPrompt,
